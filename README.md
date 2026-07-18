@@ -1,4 +1,4 @@
-# VA — Phase 1A Foundation
+# VA — Phase 1Foundation
 
 Production foundation for VA: authentication, database, and core UI shell.
 Mentor chat, Groq integration, voice, assessments, and progress are **not**
