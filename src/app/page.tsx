@@ -18,10 +18,10 @@ export default function LandingPage() {
 
       <main className="mx-auto max-w-3xl px-4 py-24 text-center">
         <h1 className="text-4xl font-semibold tracking-tight text-slate-900 sm:text-5xl">
-          Your Corporate Vocal Acuity mentor.
+          Your Vocal Acuity Mentor for Corporate Communication.
         </h1>
         <p className="mx-auto mt-4 max-w-xl text-lg text-slate-500">
-          VA show how to communicate, tracks your progress over time, and picks up right where
+          VAM AI train you professional presentation skill, tracks your progress over time, and picks up right where
           you left off — on any device.
         </p>
         <div className="mt-8 flex justify-center gap-3">
