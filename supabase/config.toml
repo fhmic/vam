@@ -17,8 +17,8 @@ port = 54323
 
 [auth]
 enabled = true
-site_url = "http://localhost:3000"
-additional_redirect_urls = ["http://localhost:3000/auth/callback"]
+site_url = https://vam-ai.vercel.app/dashboard
+additional_redirect_urls = https://vam-ai.vercel.app/auth/callback
 jwt_expiry = 3600
 enable_signup = true
 enable_confirmations = true
