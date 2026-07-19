@@ -115,8 +115,8 @@ export function OnboardingForm({
           id="timezone"
           value={timezone}
           onChange={(e) => setTimezone(e.target.value)}
-          className="h-11 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none
-            focus:border-brand-500 focus:ring-2 focus:ring-brand-500/30"
+          className="h-11 w-full rounded-xl border border-ink/10 dark:border-white/10 px-3 text-sm outline-none
+            focus:border-signal-500 focus:ring-2 focus:ring-signal-500/30"
         >
           {TIMEZONES.map((tz) => (
             <option key={tz} value={tz}>
@@ -132,8 +132,8 @@ export function OnboardingForm({
           id="profession"
           value={profession}
           onChange={(e) => setProfession(e.target.value)}
-          className="h-11 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none
-            focus:border-brand-500 focus:ring-2 focus:ring-brand-500/30"
+          className="h-11 w-full rounded-xl border border-ink/10 dark:border-white/10 px-3 text-sm outline-none
+            focus:border-signal-500 focus:ring-2 focus:ring-signal-500/30"
         >
           <option value="">Prefer not to say</option>
           {PROFESSIONS.map((option) => (
@@ -150,8 +150,8 @@ export function OnboardingForm({
           id="experienceLevel"
           value={experienceLevel}
           onChange={(e) => setExperienceLevel(e.target.value)}
-          className="h-11 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none
-            focus:border-brand-500 focus:ring-2 focus:ring-brand-500/30"
+          className="h-11 w-full rounded-xl border border-ink/10 dark:border-white/10 px-3 text-sm outline-none
+            focus:border-signal-500 focus:ring-2 focus:ring-signal-500/30"
         >
           <option value="">Prefer not to say</option>
           {EXPERIENCE_LEVELS.map((option) => (
@@ -168,8 +168,8 @@ export function OnboardingForm({
           id="primaryGoal"
           value={primaryGoal}
           onChange={(e) => setPrimaryGoal(e.target.value)}
-          className="h-11 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none
-            focus:border-brand-500 focus:ring-2 focus:ring-brand-500/30"
+          className="h-11 w-full rounded-xl border border-ink/10 dark:border-white/10 px-3 text-sm outline-none
+            focus:border-signal-500 focus:ring-2 focus:ring-signal-500/30"
         >
           <option value="">Prefer not to say</option>
           {PRIMARY_GOALS.map((option) => (
@@ -181,24 +181,24 @@ export function OnboardingForm({
       </div>
 
       {requiredDocuments.length > 0 ? (
-        <div className="flex gap-3 rounded-xl border border-slate-200 p-3">
+        <div className="flex gap-3 rounded-xl border border-ink/10 dark:border-white/10 p-3">
           <input
             id="legalAccepted"
             type="checkbox"
             checked={legalAccepted}
             onChange={(e) => setLegalAccepted(e.target.checked)}
             required
-            className="mt-0.5 h-4 w-4 shrink-0 rounded border-slate-300 text-brand-600
-              focus:ring-brand-500"
+            className="mt-0.5 h-4 w-4 shrink-0 rounded border-ink/20 dark:border-white/20 text-signal-600
+              focus:ring-signal-500"
           />
-          <Label htmlFor="legalAccepted" className="mb-0 font-normal text-slate-600">
+          <Label htmlFor="legalAccepted" className="mb-0 font-normal text-ink/70 dark:text-white/70">
             I have read and agree to the{" "}
             {requiredDocuments.map((doc, i) => (
               <span key={doc.id}>
                 <Link
                   href={LEGAL_SLUG_ROUTES[doc.slug] ?? "#"}
                   target="_blank"
-                  className="font-medium text-brand-600 underline hover:text-brand-700"
+                  className="font-medium text-signal-600 underline hover:text-signal-700"
                 >
                   {doc.name}
                 </Link>

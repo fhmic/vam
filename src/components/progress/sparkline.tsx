@@ -1,6 +1,6 @@
 export function Sparkline({ values, width = 200, height = 40 }: { values: number[]; width?: number; height?: number }) {
   if (values.length === 0) {
-    return <div className="text-xs text-slate-400">No data yet</div>;
+    return <div className="text-xs text-ink/40 dark:text-white/40">No data yet</div>;
   }
 
   const max = Math.max(...values, 1);

@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { Card } from "@/components/ui/card";
 import { Sparkline } from "@/components/progress/sparkline";
 import { completionRate, summarizeFeedback, buildAssessmentTrends } from "@/lib/analytics/aggregate";
+import { CoachCompanion } from "@/components/avatar/coach-companion";
 
 export default async function InsightsPage() {
   const supabase = await createClient();
@@ -42,33 +43,35 @@ export default async function InsightsPage() {
   return (
     <div className="space-y-8">
       <div>
-        <h1 className="text-2xl font-semibold text-slate-900">Insights</h1>
-        <p className="mt-1 text-sm text-slate-500">
+        <h1 className="text-2xl font-semibold text-ink dark:text-white">Insights</h1>
+        <p className="mt-1 text-sm text-ink/60 dark:text-white/60">
           A rollup across goals, action plans, mentor feedback, and assessments.
         </p>
       </div>
 
+      <CoachCompanion moduleKey="insights" />
+
       <div className="grid gap-4 sm:grid-cols-3">
         <Card>
-          <h2 className="text-sm font-medium text-slate-500">Goal completion</h2>
-          <p className="mt-2 text-2xl font-semibold text-slate-900">{goalCompletionPct}%</p>
-          <p className="mt-1 text-xs text-slate-400">
+          <h2 className="text-sm font-medium text-ink/60 dark:text-white/60">Goal completion</h2>
+          <p className="mt-2 text-2xl font-semibold text-ink dark:text-white">{goalCompletionPct}%</p>
+          <p className="mt-1 text-xs text-ink/40 dark:text-white/40">
             {goalsCompleted} of {(goals ?? []).length} goals completed
           </p>
         </Card>
         <Card>
-          <h2 className="text-sm font-medium text-slate-500">Action plan completion</h2>
-          <p className="mt-2 text-2xl font-semibold text-slate-900">{actionCompletionPct}%</p>
-          <p className="mt-1 text-xs text-slate-400">
+          <h2 className="text-sm font-medium text-ink/60 dark:text-white/60">Action plan completion</h2>
+          <p className="mt-2 text-2xl font-semibold text-ink dark:text-white">{actionCompletionPct}%</p>
+          <p className="mt-1 text-xs text-ink/40 dark:text-white/40">
             {actionItemsCompleted} of {(actionItems ?? []).length} items completed
           </p>
         </Card>
         <Card>
-          <h2 className="text-sm font-medium text-slate-500">Mentor quality</h2>
-          <p className="mt-2 text-2xl font-semibold text-slate-900">
+          <h2 className="text-sm font-medium text-ink/60 dark:text-white/60">Mentor quality</h2>
+          <p className="mt-2 text-2xl font-semibold text-ink dark:text-white">
             {feedbackSummary.positiveRate !== null ? `${feedbackSummary.positiveRate}%` : "—"}
           </p>
-          <p className="mt-1 text-xs text-slate-400">
+          <p className="mt-1 text-xs text-ink/40 dark:text-white/40">
             {feedbackSummary.totalRatings > 0
               ? `positive across ${feedbackSummary.totalRatings} rated replies`
               : "No ratings yet — use 👍/👎 in chat"}
@@ -78,12 +81,12 @@ export default async function InsightsPage() {
 
       {trends.length > 0 ? (
         <div>
-          <h2 className="mb-3 text-lg font-medium text-slate-900">Assessment trends</h2>
+          <h2 className="mb-3 text-lg font-medium text-ink dark:text-white">Assessment trends</h2>
           <div className="grid gap-4 sm:grid-cols-2">
             {trends.map((trend) => (
               <Card key={trend.dimension}>
                 <div className="flex items-center justify-between">
-                  <h3 className="text-sm font-medium capitalize text-slate-700">
+                  <h3 className="text-sm font-medium capitalize text-ink/80 dark:text-white/80">
                     {trend.dimension.replace(/_/g, " ")}
                   </h3>
                   {trend.delta !== null ? (
@@ -103,7 +106,7 @@ export default async function InsightsPage() {
           </div>
         </div>
       ) : (
-        <p className="text-sm text-slate-400">
+        <p className="text-sm text-ink/40 dark:text-white/40">
           Take an assessment to start tracking dimension-level trends here.
         </p>
       )}

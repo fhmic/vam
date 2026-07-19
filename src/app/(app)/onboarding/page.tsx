@@ -37,8 +37,8 @@ export default async function OnboardingPage() {
 
   return (
     <div className="mx-auto flex min-h-screen max-w-md flex-col justify-center px-4 py-16">
-      <h1 className="text-2xl font-semibold text-slate-900">Let&apos;s set you up</h1>
-      <p className="mt-1 text-sm text-slate-500">
+      <h1 className="text-2xl font-semibold text-ink dark:text-white">Let&apos;s set you up</h1>
+      <p className="mt-1 text-sm text-ink/60 dark:text-white/60">
         A couple of quick details before you meet your mentor.
       </p>
       <div className="mt-8">

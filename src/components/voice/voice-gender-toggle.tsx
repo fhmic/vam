@@ -38,7 +38,7 @@ export function VoiceGenderToggle({ initialValue }: { initialValue: VoiceGender 
   }
 
   return (
-    <div className="inline-flex items-center gap-1 rounded-xl border border-slate-200 bg-white p-1">
+    <div className="inline-flex items-center gap-1 rounded-xl border border-ink/10 dark:border-white/10 bg-white p-1">
       {OPTIONS.map((option) => (
         <button
           key={option.value}
@@ -47,8 +47,8 @@ export function VoiceGenderToggle({ initialValue }: { initialValue: VoiceGender 
           onClick={() => handleChange(option.value)}
           className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
             value === option.value
-              ? "bg-brand-600 text-white"
-              : "text-slate-600 hover:bg-slate-100"
+              ? "bg-signal-600 text-white"
+              : "text-ink/70 dark:text-white/70 hover:bg-ink/5 dark:hover:bg-white/10"
           }`}
         >
           {option.label}

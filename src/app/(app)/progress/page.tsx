@@ -3,6 +3,7 @@ import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
 import { Card } from "@/components/ui/card";
 import { Sparkline } from "@/components/progress/sparkline";
+import { CoachCompanion } from "@/components/avatar/coach-companion";
 import { ProgressClient } from "./progress-client";
 import { mondayOfCurrentWeek } from "@/lib/action-plans/suggest";
 
@@ -71,19 +72,21 @@ export default async function ProgressPage() {
   return (
     <div className="space-y-8">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold text-slate-900">Your progress</h1>
-        <Link href="/assessments" className="text-sm font-medium text-brand-600 hover:text-brand-700">
+        <h1 className="text-2xl font-semibold text-ink dark:text-white">Your progress</h1>
+        <Link href="/assessments" className="text-sm font-medium text-signal-600 hover:text-signal-700">
           Take an assessment →
         </Link>
       </div>
 
+      <CoachCompanion moduleKey="progress" />
+
       <div className="grid gap-4 sm:grid-cols-2">
         <Card>
-          <h2 className="text-sm font-medium text-slate-500">Day streak</h2>
-          <p className="mt-2 text-2xl font-semibold text-slate-900">{streakSnapshot?.metric_value ?? 0}</p>
+          <h2 className="text-sm font-medium text-ink/60 dark:text-white/60">Day streak</h2>
+          <p className="mt-2 text-2xl font-semibold text-ink dark:text-white">{streakSnapshot?.metric_value ?? 0}</p>
         </Card>
         <Card>
-          <h2 className="text-sm font-medium text-slate-500">Messages over time</h2>
+          <h2 className="text-sm font-medium text-ink/60 dark:text-white/60">Messages over time</h2>
           <div className="mt-2">
             <Sparkline values={(messageTrend ?? []).map((s) => s.metric_value)} />
           </div>
@@ -92,12 +95,12 @@ export default async function ProgressPage() {
 
       {assessmentScores && assessmentScores.length > 0 ? (
         <div>
-          <h2 className="mb-3 text-lg font-medium text-slate-900">Recent assessments</h2>
+          <h2 className="mb-3 text-lg font-medium text-ink dark:text-white">Recent assessments</h2>
           <div className="space-y-3">
             {assessmentScores.map((s, i) => (
               <Card key={i}>
-                <p className="text-sm text-slate-900">{s.narrative_summary}</p>
-                <p className="mt-1 text-xs text-slate-400">
+                <p className="text-sm text-ink dark:text-white">{s.narrative_summary}</p>
+                <p className="mt-1 text-xs text-ink/40 dark:text-white/40">
                   {new Date(s.created_at).toLocaleDateString()}
                 </p>
               </Card>

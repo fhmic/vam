@@ -76,7 +76,7 @@ export function ProgressClient({
   return (
     <div className="space-y-8">
       <div>
-        <h2 className="mb-3 text-lg font-medium text-slate-900">Goals</h2>
+        <h2 className="mb-3 text-lg font-medium text-ink dark:text-white">Goals</h2>
         <div className="mb-3 flex gap-2">
           <Input
             value={newGoalTitle}
@@ -93,8 +93,8 @@ export function ProgressClient({
             {goals.map((goal) => (
               <li key={goal.id}>
                 <Card className="flex items-center justify-between py-3">
-                  <span className="text-sm text-slate-900">{goal.title}</span>
-                  <span className="rounded-full bg-slate-100 px-2.5 py-0.5 text-xs capitalize text-slate-600">
+                  <span className="text-sm text-ink dark:text-white">{goal.title}</span>
+                  <span className="rounded-full bg-ink/5 dark:bg-white/10 px-2.5 py-0.5 text-xs capitalize text-ink/70 dark:text-white/70">
                     {goal.status}
                   </span>
                 </Card>
@@ -102,13 +102,13 @@ export function ProgressClient({
             ))}
           </ul>
         ) : (
-          <p className="text-sm text-slate-400">No goals yet — add one above.</p>
+          <p className="text-sm text-ink/40 dark:text-white/40">No goals yet — add one above.</p>
         )}
       </div>
 
       <div>
         <div className="mb-3 flex items-center justify-between">
-          <h2 className="text-lg font-medium text-slate-900">This week&apos;s action plan</h2>
+          <h2 className="text-lg font-medium text-ink dark:text-white">This week&apos;s action plan</h2>
           <Button variant="secondary" size="sm" onClick={generatePlan} isLoading={isGenerating}>
             {actionItems.length > 0 ? "Regenerate" : "Generate from my goals"}
           </Button>
@@ -122,20 +122,20 @@ export function ProgressClient({
                     type="checkbox"
                     checked={item.is_completed}
                     onChange={() => toggleItem(item)}
-                    className="h-4 w-4 rounded border-slate-300"
+                    className="h-4 w-4 rounded border-ink/20 dark:border-white/20"
                   />
-                  <span className={`flex-1 text-sm ${item.is_completed ? "text-slate-400 line-through" : "text-slate-900"}`}>
+                  <span className={`flex-1 text-sm ${item.is_completed ? "text-ink/40 dark:text-white/40 line-through" : "text-ink dark:text-white"}`}>
                     {item.title}
                   </span>
                   {item.is_ai_suggested ? (
-                    <span className="text-xs text-slate-400">suggested</span>
+                    <span className="text-xs text-ink/40 dark:text-white/40">suggested</span>
                   ) : null}
                 </Card>
               </li>
             ))}
           </ul>
         ) : (
-          <p className="text-sm text-slate-400">
+          <p className="text-sm text-ink/40 dark:text-white/40">
             No plan yet this week. Add a goal above, then generate a plan from it.
           </p>
         )}

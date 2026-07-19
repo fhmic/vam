@@ -66,7 +66,7 @@ export default function ResetPasswordPage() {
       )}
 
       <p className="mt-6 text-center text-sm text-slate-500">
-        <Link href="/sign-in" className="font-medium text-brand-600 hover:text-brand-700">
+        <Link href="/sign-in" className="font-medium text-signal-600 hover:text-signal-700">
           Back to sign in
         </Link>
       </p>

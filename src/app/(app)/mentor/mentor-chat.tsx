@@ -7,6 +7,8 @@ import { MessageFeedback } from "@/components/chat/message-feedback";
 import { VoiceGenderToggle } from "@/components/voice/voice-gender-toggle";
 import { useVoiceRecorder } from "@/hooks/use-voice-recorder";
 import { createClient } from "@/lib/supabase/client";
+import { getMentorAvatar } from "@/lib/avatar/registry";
+import { WaveformBars } from "@/components/waveform/waveform-bars";
 import type { UserPreferences } from "@/types/database";
 
 interface ChatMessage {
@@ -16,6 +18,7 @@ interface ChatMessage {
 }
 
 export function MentorChat(props: {
+  mentorSlug: string | null;
   mentorName: string;
   mentorTagline: string | null;
   initialSessionId: string | null;
@@ -23,6 +26,7 @@ export function MentorChat(props: {
   initialVoiceGender: UserPreferences["voice_gender"];
   voiceEnabled: boolean;
 }) {
+  const Avatar = getMentorAvatar(props.mentorSlug);
   const supabase = createClient();
   const [sessionId, setSessionId] = useState(props.initialSessionId);
   const [messages, setMessages] = useState<ChatMessage[]>(props.initialHistory);
@@ -183,17 +187,21 @@ export function MentorChat(props: {
 
   return (
     <div className="flex h-[calc(100vh-9rem)] flex-col">
-      <div className="mb-4 flex items-center justify-between border-b border-slate-200 pb-4">
-        <div>
-          <h1 className="text-xl font-semibold text-slate-900">{props.mentorName}</h1>
-          {props.mentorTagline ? <p className="text-sm text-slate-500">{props.mentorTagline}</p> : null}
+      <div className="mb-4 flex items-center justify-between border-b border-ink/10 dark:border-white/10 pb-4">
+        <div className="flex items-center gap-3">
+          <Avatar className="h-12 w-12 shrink-0" />
+          <div>
+            <h1 className="font-display text-xl font-medium text-ink dark:text-white">{props.mentorName}</h1>
+            {props.mentorTagline ? <p className="text-sm text-ink/60 dark:text-white/60">{props.mentorTagline}</p> : null}
+            <WaveformBars active={isSending} className="mt-1 h-3" />
+          </div>
         </div>
         <VoiceGenderToggle initialValue={props.initialVoiceGender} />
       </div>
 
       <div className="flex-1 space-y-3 overflow-y-auto py-2">
         {messages.length === 0 ? (
-          <p className="text-sm text-slate-400">Say hello to start your first conversation.</p>
+          <p className="text-sm text-ink/40 dark:text-white/40">Say hello to start your first conversation.</p>
         ) : (
         messages.map((m, i) => (
           <div key={i}>
@@ -215,7 +223,7 @@ export function MentorChat(props: {
           e.preventDefault();
           void send(draft, "text");
         }}
-        className="flex items-end gap-2 border-t border-slate-200 pt-4"
+        className="flex items-end gap-2 border-t border-ink/10 dark:border-white/10 pt-4"
       >
         <textarea
           value={draft}
@@ -228,8 +236,8 @@ export function MentorChat(props: {
           }}
           rows={1}
           placeholder="Type a message…"
-          className="min-h-11 flex-1 resize-none rounded-xl border border-slate-200 px-3 py-2.5 text-sm
-            outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-500/30"
+          className="min-h-11 flex-1 resize-none rounded-xl border border-ink/10 dark:border-white/10 px-3 py-2.5 text-sm
+            outline-none focus:border-signal-500 focus:ring-2 focus:ring-signal-500/30"
         />
         <Button
           type="button"

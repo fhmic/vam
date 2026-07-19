@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { JourneysClient } from "./journeys-client";
+import { CoachCompanion } from "@/components/avatar/coach-companion";
 
 interface JourneyStep {
   order: number;
@@ -36,7 +37,8 @@ export default async function JourneysPage() {
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-semibold text-slate-900">Coaching journeys</h1>
+      <h1 className="text-2xl font-semibold text-ink dark:text-white">Coaching journeys</h1>
+      <CoachCompanion moduleKey="journeys" />
       <JourneysClient journeys={journeyData} />
     </div>
   );

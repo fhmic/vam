@@ -34,8 +34,8 @@ export default async function AssessmentDetailPage({ params }: { params: Promise
   return (
     <div className="mx-auto max-w-xl space-y-6">
       <div>
-        <h1 className="text-2xl font-semibold text-slate-900">{template.title}</h1>
-        <p className="mt-1 text-sm text-slate-500">{template.description}</p>
+        <h1 className="text-2xl font-semibold text-ink dark:text-white">{template.title}</h1>
+        <p className="mt-1 text-sm text-ink/60 dark:text-white/60">{template.description}</p>
       </div>
       <AssessmentForm templateId={template.id} questions={schema.questions} />
     </div>

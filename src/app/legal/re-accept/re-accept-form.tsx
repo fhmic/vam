@@ -65,15 +65,15 @@ export function ReAcceptForm({ documents }: { documents: Document[] }) {
             type="checkbox"
             checked={Boolean(accepted[doc.id])}
             onChange={(e) => setAccepted((prev) => ({ ...prev, [doc.id]: e.target.checked }))}
-            className="mt-0.5 h-4 w-4 shrink-0 rounded border-slate-300 text-brand-600
-              focus:ring-brand-500"
+            className="mt-0.5 h-4 w-4 shrink-0 rounded border-slate-300 text-signal-600
+              focus:ring-signal-500"
           />
           <span>
             I have read and agree to the updated{" "}
             <Link
               href={LEGAL_SLUG_ROUTES[doc.slug] ?? "#"}
               target="_blank"
-              className="font-medium text-brand-600 underline hover:text-brand-700"
+              className="font-medium text-signal-600 underline hover:text-signal-700"
             >
               {doc.name}
             </Link>

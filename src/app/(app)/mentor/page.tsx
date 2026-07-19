@@ -16,7 +16,7 @@ export default async function MentorPage() {
   const [{ data: assignment }, { data: preferences }, { data: session }] = await Promise.all([
     supabase
       .from("user_mentor_assignments")
-      .select("mentors(display_name, tagline)")
+      .select("mentors(slug, display_name, tagline)")
       .eq("user_id", user.id)
       .order("assigned_at", { ascending: false })
       .limit(1)
@@ -49,10 +49,13 @@ export default async function MentorPage() {
 
   // Supabase's relational embed typing isn't fully resolved for this
   // hand-authored Database type; narrowed here rather than fighting it.
-  const mentor = (assignment as any)?.mentors as { display_name: string; tagline: string } | undefined;
+  const mentor = (assignment as any)?.mentors as
+    | { slug: string; display_name: string; tagline: string }
+    | undefined;
 
   return (
     <MentorChat
+      mentorSlug={mentor?.slug ?? null}
       mentorName={mentor?.display_name ?? "your mentor"}
       mentorTagline={mentor?.tagline ?? null}
       initialSessionId={session?.id ?? null}

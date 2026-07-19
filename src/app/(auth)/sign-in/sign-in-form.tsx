@@ -79,7 +79,7 @@ export function SignInForm() {
         <div>
           <div className="flex items-center justify-between">
             <Label htmlFor="password">Password</Label>
-            <Link href="/reset-password" className="text-xs font-medium text-brand-600 hover:text-brand-700">
+            <Link href="/reset-password" className="text-xs font-medium text-signal-600 hover:text-signal-700">
               Forgot password?
             </Link>
           </div>
@@ -110,7 +110,7 @@ export function SignInForm() {
 
       <p className="mt-6 text-center text-sm text-slate-500">
         Don&apos;t have an account?{" "}
-        <Link href="/sign-up" className="font-medium text-brand-600 hover:text-brand-700">
+        <Link href="/sign-up" className="font-medium text-signal-600 hover:text-signal-700">
           Sign up
         </Link>
       </p>

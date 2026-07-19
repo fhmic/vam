@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { NavBar } from "@/components/layout/navbar";
+import { ThemeProvider } from "@/components/theme/theme-provider";
 
 /**
  * AUDIT NOTE (Phase 1A Final Production Readiness Audit, Phase 3 — Soft
@@ -48,7 +49,8 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   }
 
   return (
-    <div className="min-h-screen bg-slate-50">
+    <div className="min-h-screen bg-paper dark:bg-ink">
+      <ThemeProvider />
       <NavBar displayName={profile?.display_name ?? null} />
       <main className="mx-auto max-w-5xl px-4 py-10">{children}</main>
     </div>

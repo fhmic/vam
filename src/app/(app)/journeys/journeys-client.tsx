@@ -43,23 +43,23 @@ export function JourneysClient({ journeys }: { journeys: JourneyData[] }) {
 
         return (
           <Card key={journey.id}>
-            <h2 className="font-medium text-slate-900">{journey.title}</h2>
-            <p className="mt-1 text-sm text-slate-500">{journey.description}</p>
+            <h2 className="font-medium text-ink dark:text-white">{journey.title}</h2>
+            <p className="mt-1 text-sm text-ink/60 dark:text-white/60">{journey.description}</p>
 
             {journey.progress ? (
               <div className="mt-3">
                 {isComplete ? (
                   <p className="text-sm font-medium text-emerald-600">Completed 🎉</p>
                 ) : currentStep ? (
-                  <p className="text-sm text-slate-700">
+                  <p className="text-sm text-ink/80 dark:text-white/80">
                     Step {currentStep.order} of {journey.steps.length}: <strong>{currentStep.title}</strong>
                     <br />
-                    <span className="text-slate-500">{currentStep.objective}</span>
+                    <span className="text-ink/60 dark:text-white/60">{currentStep.objective}</span>
                   </p>
                 ) : null}
               </div>
             ) : (
-              <p className="mt-3 text-sm text-slate-400">Not started yet.</p>
+              <p className="mt-3 text-sm text-ink/40 dark:text-white/40">Not started yet.</p>
             )}
 
             {!isComplete ? (

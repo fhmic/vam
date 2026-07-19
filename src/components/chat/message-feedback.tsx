@@ -23,7 +23,7 @@ export function MessageFeedback({ messageId }: { messageId: string }) {
       <button
         type="button"
         onClick={() => rate(1)}
-        className={`rounded px-1.5 py-0.5 text-xs ${rating === 1 ? "bg-emerald-100 text-emerald-700" : "text-slate-300 hover:text-slate-500"}`}
+        className={`rounded px-1.5 py-0.5 text-xs ${rating === 1 ? "bg-emerald-100 text-emerald-700" : "text-ink/30 dark:text-white/30 hover:text-ink/60 dark:hover:text-white/60"}`}
         aria-label="Helpful"
       >
         👍
@@ -31,7 +31,7 @@ export function MessageFeedback({ messageId }: { messageId: string }) {
       <button
         type="button"
         onClick={() => rate(-1)}
-        className={`rounded px-1.5 py-0.5 text-xs ${rating === -1 ? "bg-red-100 text-red-700" : "text-slate-300 hover:text-slate-500"}`}
+        className={`rounded px-1.5 py-0.5 text-xs ${rating === -1 ? "bg-red-100 text-red-700" : "text-ink/30 dark:text-white/30 hover:text-ink/60 dark:hover:text-white/60"}`}
         aria-label="Not helpful"
       >
         👎
