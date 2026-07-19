@@ -21,12 +21,10 @@ site_url = "https://vam-ai.vercel.app"
 additional_redirect_urls = ["https://vam-ai.vercel.app/auth/callback"]
 jwt_expiry = 3600
 enable_signup = true
-enable_confirmations = true
 
 [auth.email]
 enable_signup = true
 double_confirm_changes = true
-enable_confirmations = true
 
 [auth.external.google]
 enabled = false
