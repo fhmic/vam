@@ -22,7 +22,7 @@ export default function LandingPage() {
         </h1>
         <p className="mx-auto mt-4 max-w-xl text-lg text-slate-500">
           VAM AI train you professional presentation skill, tracks your progress over time, and picks up right where
-          you left off — on any device.
+          you left off on any device.
         </p>
         <div className="mt-8 flex justify-center gap-3">
           <Link href="/sign-up">
