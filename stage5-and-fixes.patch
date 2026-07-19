@@ -1,0 +1,550 @@
+diff -ruN '--exclude=node_modules' '--exclude=.next' '--exclude=package-lock.json' '--exclude=tsconfig.tsbuildinfo' '--exclude=next-env.d.ts' '--exclude=.git' va-live-check/.env.example va-current/.env.example
+--- va-live-check/.env.example	1970-01-01 00:00:00.000000000 +0000
++++ va-current/.env.example	2026-07-19 07:46:51.213694767 +0000
+@@ -0,0 +1,20 @@
++# ── Supabase ──────────────────────────────────────────────────────────
++# Public (safe to expose to the browser)
++NEXT_PUBLIC_SUPABASE_URL=https://YOUR-PROJECT-REF.supabase.co
++NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-key
++
++# Server-only — NEVER prefix with NEXT_PUBLIC_, never import in a client component
++SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
++
++# ── App ───────────────────────────────────────────────────────────────
++NEXT_PUBLIC_APP_URL=http://localhost:3000
++
++# ── Groq (Stage 2 — Mentor / Groq Integration) ───────────────────────────
++GROQ_API_KEY=
++GROQ_MODEL_CHAT=
++GROQ_MODEL_UTILITY=
++GROQ_MODEL_STT=
++GROQ_MODEL_TTS=
++
++# ── Cron / internal routes (added later) ───────────────────────────────
++# INTERNAL_CRON_SECRET=
+diff -ruN '--exclude=node_modules' '--exclude=.next' '--exclude=package-lock.json' '--exclude=tsconfig.tsbuildinfo' '--exclude=next-env.d.ts' '--exclude=.git' va-live-check/README.md va-current/README.md
+--- va-live-check/README.md	2026-07-19 07:43:33.525683016 +0000
++++ va-current/README.md	2026-07-19 07:47:04.089470161 +0000
+@@ -1,4 +1,4 @@
+-# VA Phase 1: Foundation
++# VAM Phase 1: Foundation
+ 
+ Production foundation for VA: authentication, database, and core UI shell.
+ Mentor chat, Groq integration, voice, assessments, and progress are **not**
+diff -ruN '--exclude=node_modules' '--exclude=.next' '--exclude=package-lock.json' '--exclude=tsconfig.tsbuildinfo' '--exclude=next-env.d.ts' '--exclude=.git' va-live-check/docs/STAGE-2-NOTES.md va-current/docs/STAGE-2-NOTES.md
+--- va-live-check/docs/STAGE-2-NOTES.md	2026-07-19 07:43:33.528510016 +0000
++++ va-current/docs/STAGE-2-NOTES.md	1970-01-01 00:00:00.000000000 +0000
+@@ -1,117 +0,0 @@
+-# VA — Stage 2 Implementation Notes
+-
+-Companion to `docs/blueprint/VA-Phase1-Technical-Blueprint.md` and the
+-Phase 1A audit docs. Records the scope decisions and known gaps in the
+-Stage 2 build (Mentor Domain Model, Mentor Matching Engine, Groq
+-Integration, Conversation Memory, Voice Layer, Progress Tracking) so
+-they're not mistaken for oversights later.
+-
+-## Scope note: Mentor Matching Engine wasn't in the original blueprint
+-
+-The Phase 1 blueprint specified a single, fixed mentor persona for
+-Phase 1. Stage 2 was asked for explicitly as a matching engine across
+-multiple personas, so four mentor personas (`the-coach`, `the-guide`,
+-`the-strategist`, `the-sparring-partner`) were seeded in migration 0011
+-and a deterministic scoring engine (`src/lib/mentor/matching.ts`) picks
+-between them based on the profile/preference fields already collected
+-during onboarding. This is a genuine scope expansion, done deliberately,
+-not a misreading of the original architecture doc.
+-
+-## Not live-tested: Groq API
+-
+-`api.groq.com` is not reachable from the environment this was built in.
+-Every Groq-calling function (`src/lib/groq/client.ts`: chat completion
+-streaming, JSON-mode completion, transcription, speech synthesis) is
+-implemented against Groq's documented REST API shape (OpenAI-compatible
+-`/openai/v1/chat/completions`, `/audio/transcriptions`, `/audio/speech`)
+-but has never actually been called. Before relying on this:
+-
+-1. Verify `GROQ_MODEL_CHAT`, `GROQ_MODEL_UTILITY`, `GROQ_MODEL_STT`,
+-   `GROQ_MODEL_TTS` in `.env.local`/Vercel are real, currently-available
+-   Groq-hosted model names — Groq's model catalog changes over time and
+-   this repo does not hardcode any model name, specifically so it can't
+-   silently go stale in code.
+-2. Verify Groq's `/audio/speech` endpoint and request shape match what
+-   `synthesizeSpeech()` sends — this was implemented from a general
+-   understanding of Groq's TTS offering, not a verified live spec.
+-3. Run one real end-to-end chat turn against a real Groq key before
+-   trusting the SSE-parsing logic in `mentor-chat.tsx` and
+-   `readGroqSseText()` in `/api/chat/route.ts` — both assume the
+-   standard OpenAI-style `data: {"choices":[{"delta":{"content":"..."}}]}`
+-   SSE chunk shape.
+-
+-## Deliberate gap: no embedding-based memory retrieval
+-
+-`memory_items.embedding` (migration 0014) exists in the schema but is
+-never populated or queried. Groq does not offer an embeddings endpoint;
+-no other embedding provider has been selected. Retrieval
+-(`src/lib/memory/retrieval.ts`) ranks purely by `importance x
+-recency-decay`. This is fine for a small number of memory items per
+-user but will degrade as memory grows — revisit once an embedding
+-provider is chosen (this only requires changing `getRelevantMemories`,
+-not the schema).
+-
+-## Deliberate gap: memory extraction and progress snapshots are synchronous, not queued
+-
+-The Phase 1 blueprint (Section 6.4) describes memory extraction as a
+-queued Postgres/pg_cron job. Stage 2 instead runs extraction inline,
+-after the streamed reply is buffered, inside the same request's async
+-tail (`persistFullReply` in `/api/chat/route.ts`) — extraction runs
+-every 6 messages, non-blocking to the client response. Progress
+-snapshot recording (`recordActivitySnapshot`) runs on every turn. Both
+-are fire-and-forget from the client's perspective but still consume
+-server compute per request. Acceptable at current scale; revisit with
+-real queue infrastructure if Groq utility-call volume or database write
+-volume becomes a cost/latency concern.
+-
+-## Deliberate gap: assessments are not part of Stage 2
+-
+-Progress Tracking (Stage 2.6) is activity-derived only (`total_messages`,
+-`day_streak`). `progress_snapshots.source` already distinguishes
+-`'activity'` from `'assessment'` so assessment-derived snapshots can be
+-added later without a schema change — but no assessment engine exists
+-in this codebase yet.
+-
+-## Voice: placeholder voice identifiers
+-
+-`mentors.voice_id` values (e.g. `voice-warm-male-01`) and the fallback
+-map in `src/lib/voice/provider.ts` are placeholders, not real
+-identifiers from any specific TTS provider's voice catalog. Replace
+-these with real voice IDs once the actual TTS provider/catalog is
+-confirmed against Groq's live API (or a different provider, if Groq's
+-TTS offering turns out not to fit — the `VoiceProvider`-style
+-abstraction in `resolveVoiceId()` is the only place that would need to
+-change).
+-
+-## Voice gender switching — how it actually works
+-
+-`user_preferences.voice_gender` (`'auto' | 'male' | 'female'`, migration
+-0016) is user-editable directly via the RLS-scoped browser client (no
+-custom API route — the existing owner-update policy on
+-`user_preferences` already permits it). `/api/voice/tts` re-reads this
+-preference on every request and resolves the actual voice via
+-`resolveVoiceId()`, so a change takes effect on the very next spoken
+-reply with no client-side state to keep in sync. `'auto'` defers to
+-whichever mentor is currently assigned; `'male'`/`'female'` always
+-override it, regardless of mentor.
+-
+-## Security pattern followed for all new privileged code
+-
+-Every new privileged operation (`/api/chat`, `/api/voice/stt`,
+-`/api/voice/tts`, `/api/mentor/rematch`) starts with
+-`verifyAuthenticatedUser()` before touching the admin client, per
+-ADR-002 and the Phase 1A audit's established pattern — including the
+-soft-delete rejection added in that audit, which now also protects
+-every Stage 2 route for free.
+-
+-## What was actually validated in this environment
+-
+-`npm run lint`, `npx tsc --noEmit`, `npx vitest run` (39 passing, 6
+-still-skipped DB integration tests unrelated to Stage 2), and
+-`npm run build` were all executed against the real repository with
+-Stage 2 code included, and all passed. What was **not** validated:
+-any live Groq API call, any live Supabase migration apply (same
+-sandbox limitation as the Phase 1A audit — no Docker daemon available
+-here), and no browser-level test of `MediaRecorder`/audio playback
+-(jsdom, used by this project's test environment, does not implement
+-either).
+diff -ruN '--exclude=node_modules' '--exclude=.next' '--exclude=package-lock.json' '--exclude=tsconfig.tsbuildinfo' '--exclude=next-env.d.ts' '--exclude=.git' va-live-check/package.json va-current/package.json
+--- va-live-check/package.json	2026-07-19 07:43:33.529683016 +0000
++++ va-current/package.json	2026-07-19 07:46:51.232831927 +0000
+@@ -1,5 +1,5 @@
+ {
+-  "name": "va",
++  "name": "vam",
+   "version": "0.1.0",
+   "private": true,
+   "scripts": {
+diff -ruN '--exclude=node_modules' '--exclude=.next' '--exclude=package-lock.json' '--exclude=tsconfig.tsbuildinfo' '--exclude=next-env.d.ts' '--exclude=.git' va-live-check/src/app/(app)/insights/page.tsx va-current/src/app/(app)/insights/page.tsx
+--- va-live-check/src/app/(app)/insights/page.tsx	1970-01-01 00:00:00.000000000 +0000
++++ va-current/src/app/(app)/insights/page.tsx	2026-07-19 07:47:56.133698626 +0000
+@@ -0,0 +1,112 @@
++import { redirect } from "next/navigation";
++import { createClient } from "@/lib/supabase/server";
++import { Card } from "@/components/ui/card";
++import { Sparkline } from "@/components/progress/sparkline";
++import { completionRate, summarizeFeedback, buildAssessmentTrends } from "@/lib/analytics/aggregate";
++
++export default async function InsightsPage() {
++  const supabase = await createClient();
++
++  const {
++    data: { user },
++  } = await supabase.auth.getUser();
++
++  if (!user) {
++    redirect("/sign-in");
++  }
++
++  const [{ data: goals }, { data: actionItems }, { data: feedback }, { data: assessmentScores }] =
++    await Promise.all([
++      supabase.from("goals").select("status").eq("user_id", user.id),
++      supabase.from("action_plan_items").select("is_completed").eq("user_id", user.id),
++      supabase.from("message_feedback").select("rating").eq("user_id", user.id),
++      supabase
++        .from("assessment_scores")
++        .select("scores, created_at")
++        .eq("user_id", user.id)
++        .order("created_at", { ascending: true }),
++    ]);
++
++  const goalsCompleted = (goals ?? []).filter((g) => g.status === "completed").length;
++  const goalCompletionPct = completionRate(goalsCompleted, (goals ?? []).length);
++
++  const actionItemsCompleted = (actionItems ?? []).filter((i) => i.is_completed).length;
++  const actionCompletionPct = completionRate(actionItemsCompleted, (actionItems ?? []).length);
++
++  const feedbackSummary = summarizeFeedback((feedback ?? []).map((f) => f.rating));
++
++  const trends = buildAssessmentTrends(
++    (assessmentScores ?? []).map((s) => s.scores as Record<string, number>),
++  );
++
++  return (
++    <div className="space-y-8">
++      <div>
++        <h1 className="text-2xl font-semibold text-slate-900">Insights</h1>
++        <p className="mt-1 text-sm text-slate-500">
++          A rollup across goals, action plans, mentor feedback, and assessments.
++        </p>
++      </div>
++
++      <div className="grid gap-4 sm:grid-cols-3">
++        <Card>
++          <h2 className="text-sm font-medium text-slate-500">Goal completion</h2>
++          <p className="mt-2 text-2xl font-semibold text-slate-900">{goalCompletionPct}%</p>
++          <p className="mt-1 text-xs text-slate-400">
++            {goalsCompleted} of {(goals ?? []).length} goals completed
++          </p>
++        </Card>
++        <Card>
++          <h2 className="text-sm font-medium text-slate-500">Action plan completion</h2>
++          <p className="mt-2 text-2xl font-semibold text-slate-900">{actionCompletionPct}%</p>
++          <p className="mt-1 text-xs text-slate-400">
++            {actionItemsCompleted} of {(actionItems ?? []).length} items completed
++          </p>
++        </Card>
++        <Card>
++          <h2 className="text-sm font-medium text-slate-500">Mentor quality</h2>
++          <p className="mt-2 text-2xl font-semibold text-slate-900">
++            {feedbackSummary.positiveRate !== null ? `${feedbackSummary.positiveRate}%` : "—"}
++          </p>
++          <p className="mt-1 text-xs text-slate-400">
++            {feedbackSummary.totalRatings > 0
++              ? `positive across ${feedbackSummary.totalRatings} rated replies`
++              : "No ratings yet — use 👍/👎 in chat"}
++          </p>
++        </Card>
++      </div>
++
++      {trends.length > 0 ? (
++        <div>
++          <h2 className="mb-3 text-lg font-medium text-slate-900">Assessment trends</h2>
++          <div className="grid gap-4 sm:grid-cols-2">
++            {trends.map((trend) => (
++              <Card key={trend.dimension}>
++                <div className="flex items-center justify-between">
++                  <h3 className="text-sm font-medium capitalize text-slate-700">
++                    {trend.dimension.replace(/_/g, " ")}
++                  </h3>
++                  {trend.delta !== null ? (
++                    <span
++                      className={`text-xs font-medium ${trend.delta >= 0 ? "text-emerald-600" : "text-red-600"}`}
++                    >
++                      {trend.delta >= 0 ? "+" : ""}
++                      {trend.delta}
++                    </span>
++                  ) : null}
++                </div>
++                <div className="mt-2">
++                  <Sparkline values={trend.values} />
++                </div>
++              </Card>
++            ))}
++          </div>
++        </div>
++      ) : (
++        <p className="text-sm text-slate-400">
++          Take an assessment to start tracking dimension-level trends here.
++        </p>
++      )}
++    </div>
++  );
++}
+diff -ruN '--exclude=node_modules' '--exclude=.next' '--exclude=package-lock.json' '--exclude=tsconfig.tsbuildinfo' '--exclude=next-env.d.ts' '--exclude=.git' va-live-check/src/app/(app)/settings/profile/page.tsx va-current/src/app/(app)/settings/profile/page.tsx
+--- va-live-check/src/app/(app)/settings/profile/page.tsx	2026-07-19 07:43:33.537089531 +0000
++++ va-current/src/app/(app)/settings/profile/page.tsx	2026-07-19 07:48:29.574156339 +0000
+@@ -36,8 +36,21 @@
+           <p className="font-medium text-slate-900">{profile?.timezone}</p>
+         </div>
+       </Card>
++      <Card>
++        <h2 className="font-medium text-slate-900">Your data</h2>
++        <p className="mt-1 text-sm text-slate-500">
++          Download everything stored about you — profile, goals, conversations, memory, and
++          assessment history — as a single JSON file.
++        </p>
++        <a
++          href="/api/export"
++          className="mt-3 inline-block rounded-xl bg-slate-100 px-4 py-2 text-sm font-medium text-slate-900 hover:bg-slate-200"
++        >
++          Download my data
++        </a>
++      </Card>
+       <p className="text-sm text-slate-400">
+-        Editable settings, communication DNA view, and data export arrive in a later phase.
++        Editable settings and a communication DNA view arrive in a later phase.
+       </p>
+     </div>
+   );
+diff -ruN '--exclude=node_modules' '--exclude=.next' '--exclude=package-lock.json' '--exclude=tsconfig.tsbuildinfo' '--exclude=next-env.d.ts' '--exclude=.git' va-live-check/src/app/api/export/route.ts va-current/src/app/api/export/route.ts
+--- va-live-check/src/app/api/export/route.ts	1970-01-01 00:00:00.000000000 +0000
++++ va-current/src/app/api/export/route.ts	2026-07-19 07:48:13.061699632 +0000
+@@ -0,0 +1,70 @@
++import { NextResponse } from "next/server";
++import { verifyAuthenticatedUser } from "@/lib/supabase/auth-guard";
++import { createAdminClient } from "@/lib/supabase/admin";
++
++/**
++ * Stage 5 — data export.
++ *
++ * Closes a gap flagged as far back as the original Phase 1A CTO Review
++ * Pack ("no account deletion / data export endpoints yet"). Returns a
++ * JSON snapshot of every table the user owns data in. Uses the admin
++ * client only to run one query per table cleanly in parallel — every
++ * query is still explicitly scoped to auth.data.user.id, never a
++ * client-supplied id, consistent with every other admin-client call
++ * site in this codebase.
++ */
++export async function GET() {
++  const auth = await verifyAuthenticatedUser();
++  if (!auth.ok) return auth.response;
++  const { user } = auth.data;
++
++  const admin = createAdminClient();
++
++  const [
++    profile,
++    preferences,
++    goals,
++    actionPlans,
++    actionPlanItems,
++    messages,
++    memoryItems,
++    assessmentResponses,
++    assessmentScores,
++    journeyProgress,
++    legalAcceptances,
++  ] = await Promise.all([
++    admin.from("profiles").select("*").eq("id", user.id).single(),
++    admin.from("user_preferences").select("*").eq("user_id", user.id).single(),
++    admin.from("goals").select("*").eq("user_id", user.id),
++    admin.from("action_plans").select("*").eq("user_id", user.id),
++    admin.from("action_plan_items").select("*").eq("user_id", user.id),
++    admin.from("messages").select("role, content, created_at").eq("user_id", user.id),
++    admin.from("memory_items").select("type, content, importance, created_at").eq("user_id", user.id),
++    admin.from("assessment_responses").select("*").eq("user_id", user.id),
++    admin.from("assessment_scores").select("*").eq("user_id", user.id),
++    admin.from("user_journey_progress").select("*").eq("user_id", user.id),
++    admin.from("legal_acceptances").select("document_id, accepted_at").eq("user_id", user.id),
++  ]);
++
++  const exportData = {
++    exported_at: new Date().toISOString(),
++    profile: profile.data,
++    preferences: preferences.data,
++    goals: goals.data ?? [],
++    action_plans: actionPlans.data ?? [],
++    action_plan_items: actionPlanItems.data ?? [],
++    messages: messages.data ?? [],
++    memory_items: memoryItems.data ?? [],
++    assessment_responses: assessmentResponses.data ?? [],
++    assessment_scores: assessmentScores.data ?? [],
++    journey_progress: journeyProgress.data ?? [],
++    legal_acceptances: legalAcceptances.data ?? [],
++  };
++
++  return new Response(JSON.stringify(exportData, null, 2), {
++    headers: {
++      "Content-Type": "application/json",
++      "Content-Disposition": `attachment; filename="vam-data-export-${user.id}.json"`,
++    },
++  });
++}
+diff -ruN '--exclude=node_modules' '--exclude=.next' '--exclude=package-lock.json' '--exclude=tsconfig.tsbuildinfo' '--exclude=next-env.d.ts' '--exclude=.git' va-live-check/src/components/layout/navbar.tsx va-current/src/components/layout/navbar.tsx
+--- va-live-check/src/components/layout/navbar.tsx	2026-07-19 07:43:33.546364793 +0000
++++ va-current/src/components/layout/navbar.tsx	2026-07-19 07:48:02.016041945 +0000
+@@ -35,6 +35,9 @@
+             <Link href="/journeys" className="text-sm text-slate-600 hover:text-slate-900">
+               Journeys
+             </Link>
++            <Link href="/insights" className="text-sm text-slate-600 hover:text-slate-900">
++              Insights
++            </Link>
+           </nav>
+         </div>
+         <div className="flex items-center gap-4">
+diff -ruN '--exclude=node_modules' '--exclude=.next' '--exclude=package-lock.json' '--exclude=tsconfig.tsbuildinfo' '--exclude=next-env.d.ts' '--exclude=.git' va-live-check/src/lib/analytics/aggregate.ts va-current/src/lib/analytics/aggregate.ts
+--- va-live-check/src/lib/analytics/aggregate.ts	1970-01-01 00:00:00.000000000 +0000
++++ va-current/src/lib/analytics/aggregate.ts	2026-07-19 07:47:37.177697499 +0000
+@@ -0,0 +1,67 @@
++/**
++ * Stage 5 — Insights dashboard (individual-account analytics).
++ *
++ * Pure aggregation math only — no I/O — so every function here is
++ * directly unit-testable (tests/unit/analytics-aggregate.test.ts). The
++ * server component that calls these (src/app/(app)/insights/page.tsx)
++ * is responsible for fetching the raw rows and is intentionally kept
++ * thin.
++ */
++
++export function completionRate(completed: number, total: number): number {
++  if (total === 0) return 0;
++  return Math.round((completed / total) * 100);
++}
++
++export interface FeedbackSummary {
++  averageRating: number | null;
++  totalRatings: number;
++  positiveRate: number | null;
++}
++
++/** ratings: array of -1 | 1, one per message_feedback row. */
++export function summarizeFeedback(ratings: number[]): FeedbackSummary {
++  if (ratings.length === 0) {
++    return { averageRating: null, totalRatings: 0, positiveRate: null };
++  }
++  const positive = ratings.filter((r) => r > 0).length;
++  const sum = ratings.reduce((acc, r) => acc + r, 0);
++  return {
++    averageRating: Math.round((sum / ratings.length) * 100) / 100,
++    totalRatings: ratings.length,
++    positiveRate: Math.round((positive / ratings.length) * 100),
++  };
++}
++
++export interface AssessmentDimensionTrend {
++  dimension: string;
++  values: number[];
++  delta: number | null;
++}
++
++/**
++ * Groups assessment_scores.scores (one jsonb blob per submission, taken
++ * over time) by dimension key, in chronological order, and computes the
++ * change from the first to the most recent value — the simplest
++ * possible "are you improving" signal without inventing a scoring
++ * model beyond what Groq already returned per submission.
++ */
++export function buildAssessmentTrends(
++  scoresOverTime: Record<string, number>[],
++): AssessmentDimensionTrend[] {
++  const byDimension = new Map<string, number[]>();
++
++  for (const scores of scoresOverTime) {
++    for (const [dimension, value] of Object.entries(scores)) {
++      const existing = byDimension.get(dimension) ?? [];
++      existing.push(value);
++      byDimension.set(dimension, existing);
++    }
++  }
++
++  return Array.from(byDimension.entries()).map(([dimension, values]) => ({
++    dimension,
++    values,
++    delta: values.length >= 2 ? values[values.length - 1]! - values[0]! : null,
++  }));
++}
+diff -ruN '--exclude=node_modules' '--exclude=.next' '--exclude=package-lock.json' '--exclude=tsconfig.tsbuildinfo' '--exclude=next-env.d.ts' '--exclude=.git' va-live-check/supabase/config.toml va-current/supabase/config.toml
+--- va-live-check/supabase/config.toml	2026-07-19 07:43:33.551569528 +0000
++++ va-current/supabase/config.toml	2026-07-19 07:45:44.597656395 +0000
+@@ -17,8 +17,8 @@
+ 
+ [auth]
+ enabled = true
+-site_url = https://vam-ai.vercel.app/dashboard
+-additional_redirect_urls =h ttps://vam-ai.vercel.app/auth/callback
++site_url = "https://vam-ai.vercel.app"
++additional_redirect_urls = ["https://vam-ai.vercel.app/auth/callback"]
+ jwt_expiry = 3600
+ enable_signup = true
+ enable_confirmations = true
+diff -ruN '--exclude=node_modules' '--exclude=.next' '--exclude=package-lock.json' '--exclude=tsconfig.tsbuildinfo' '--exclude=next-env.d.ts' '--exclude=.git' va-live-check/tests/unit/analytics-aggregate.test.ts va-current/tests/unit/analytics-aggregate.test.ts
+--- va-live-check/tests/unit/analytics-aggregate.test.ts	1970-01-01 00:00:00.000000000 +0000
++++ va-current/tests/unit/analytics-aggregate.test.ts	2026-07-19 07:48:53.769702052 +0000
+@@ -0,0 +1,68 @@
++import { describe, expect, it } from "vitest";
++import { buildAssessmentTrends, completionRate, summarizeFeedback } from "@/lib/analytics/aggregate";
++
++describe("completionRate", () => {
++  it("returns 0 for an empty set rather than dividing by zero", () => {
++    expect(completionRate(0, 0)).toBe(0);
++  });
++
++  it("rounds to the nearest whole percent", () => {
++    expect(completionRate(1, 3)).toBe(33);
++  });
++
++  it("returns 100 when everything is complete", () => {
++    expect(completionRate(5, 5)).toBe(100);
++  });
++});
++
++describe("summarizeFeedback", () => {
++  it("returns nulls when there is no feedback yet", () => {
++    const result = summarizeFeedback([]);
++    expect(result.averageRating).toBeNull();
++    expect(result.positiveRate).toBeNull();
++    expect(result.totalRatings).toBe(0);
++  });
++
++  it("computes positive rate correctly for a mixed set", () => {
++    const result = summarizeFeedback([1, 1, -1, 1]);
++    expect(result.totalRatings).toBe(4);
++    expect(result.positiveRate).toBe(75);
++  });
++
++  it("computes average rating correctly", () => {
++    const result = summarizeFeedback([1, -1]);
++    expect(result.averageRating).toBe(0);
++  });
++});
++
++describe("buildAssessmentTrends", () => {
++  it("groups scores by dimension across multiple submissions in order", () => {
++    const trends = buildAssessmentTrends([
++      { confidence_pressure: 40, clarity_feedback: 60 },
++      { confidence_pressure: 55, clarity_feedback: 65 },
++    ]);
++
++    const confidence = trends.find((t) => t.dimension === "confidence_pressure");
++    expect(confidence?.values).toEqual([40, 55]);
++    expect(confidence?.delta).toBe(15);
++  });
++
++  it("returns a null delta when only one submission exists", () => {
++    const trends = buildAssessmentTrends([{ confidence_pressure: 40 }]);
++    expect(trends[0]?.delta).toBeNull();
++  });
++
++  it("returns an empty array when there is no assessment history", () => {
++    expect(buildAssessmentTrends([])).toEqual([]);
++  });
++
++  it("handles a dimension that disappears in a later submission without crashing", () => {
++    const trends = buildAssessmentTrends([
++      { confidence_pressure: 40, clarity_feedback: 60 },
++      { confidence_pressure: 55 },
++    ]);
++    const clarity = trends.find((t) => t.dimension === "clarity_feedback");
++    expect(clarity?.values).toEqual([60]);
++    expect(clarity?.delta).toBeNull();
++  });
++});
