@@ -1,4 +1,4 @@
-# CI Gate — CTO Review Foundation Hardening Changes #5.
+# CI Gate — CTO Review Foundation Hardening Change #5.
 #
 # Required to pass before merge (see README "Deployment (Vercel)" and
 # Phase 1 blueprint Section 10.3). Runs on every PR and on push to main
