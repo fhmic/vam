@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
+import { CAREER_LEVELS, COUNTRIES } from "@/lib/onboarding/constants";
 
 /**
  * Priority test #3 (Onboarding completion flow) — validates the request
@@ -12,21 +13,31 @@ import { z } from "zod";
  * for). If the two schemas drift, this is exactly the kind of gap the
  * integration test (once wired to a real test project) will catch by
  * exercising the real route.
+ *
+ * Product Redefinition — Onboarding Overhaul: profession/experience_level
+ * are gone; industryId/functionalAreaId/currentRoleId/careerLevel/
+ * organizationName/country replace them.
  */
-const PROFESSIONS = [
-  "Student",
-  "Professional",
-  "Manager",
-  "Executive",
-  "Founder",
-  "Consultant",
-  "Job Seeker",
+const PRIMARY_GOALS = [
+  "Improve Confidence",
+  "Executive Presence",
+  "Ace Interviews",
+  "Improve Presentations",
+  "Improve Meetings",
+  "Become More Persuasive",
+  "Leadership Communication",
 ] as const;
 
 const bodySchema = z.object({
   displayName: z.string().trim().min(1).max(80),
   timezone: z.string().trim().min(1).max(64),
-  profession: z.enum(PROFESSIONS).optional(),
+  country: z.enum(COUNTRIES).optional(),
+  organizationName: z.string().trim().max(160).optional(),
+  industryId: z.string().uuid().optional(),
+  functionalAreaId: z.string().uuid().optional(),
+  currentRoleId: z.string().uuid().optional(),
+  careerLevel: z.enum(CAREER_LEVELS).optional(),
+  primaryGoal: z.enum(PRIMARY_GOALS).optional(),
   acceptedDocumentIds: z.array(z.string().uuid()).default([]),
 });
 
@@ -44,11 +55,44 @@ describe("onboarding completion request schema", () => {
     expect(result.success).toBe(false);
   });
 
-  it("rejects a profession outside the allowed set", () => {
+  it("accepts a full professional-identity payload", () => {
     const result = bodySchema.safeParse({
       displayName: "Jamie",
       timezone: "UTC",
-      profession: "Wizard",
+      country: "Nigeria",
+      organizationName: "Acme Bank",
+      industryId: "550e8400-e29b-41d4-a716-446655440000",
+      functionalAreaId: "550e8400-e29b-41d4-a716-446655440001",
+      currentRoleId: "550e8400-e29b-41d4-a716-446655440002",
+      careerLevel: "Executive Level",
+      primaryGoal: "Executive Presence",
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects a career level outside the fixed six-value progression", () => {
+    const result = bodySchema.safeParse({
+      displayName: "Jamie",
+      timezone: "UTC",
+      careerLevel: "Wizard Level",
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects a country outside the known list", () => {
+    const result = bodySchema.safeParse({
+      displayName: "Jamie",
+      timezone: "UTC",
+      country: "Narnia",
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects a non-uuid industryId", () => {
+    const result = bodySchema.safeParse({
+      displayName: "Jamie",
+      timezone: "UTC",
+      industryId: "not-a-uuid",
     });
     expect(result.success).toBe(false);
   });

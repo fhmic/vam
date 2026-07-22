@@ -50,8 +50,7 @@ describe.skipIf(!hasTestEnv)("onboarding completion data contract", () => {
       .update({
         display_name: "Jamie",
         timezone: "America/New_York",
-        profession: "Founder",
-        experience_level: "Intermediate",
+        career_level: "Executive Level",
         primary_goal: "Executive Presence",
         onboarding_completed_at: now,
         terms_accepted_at: now,
@@ -70,7 +69,7 @@ describe.skipIf(!hasTestEnv)("onboarding completion data contract", () => {
       .single();
 
     expect(profile?.onboarding_completed_at).not.toBeNull();
-    expect(profile?.profession).toBe("Founder");
+    expect(profile?.career_level).toBe("Executive Level");
 
     const { data: acceptances } = await admin
       .from("legal_acceptances")

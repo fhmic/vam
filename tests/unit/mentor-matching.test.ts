@@ -37,8 +37,7 @@ const balanced = mentor({
 describe("scoreMentor", () => {
   it("scores a goal match higher than a style-only match", () => {
     const input: MatchInput = {
-      profession: "Job Seeker",
-      experienceLevel: "Beginner",
+      careerLevel: "Senior Level",
       primaryGoal: "Ace Interviews",
       mentorStyle: "balanced",
       coachingIntensity: "medium",
@@ -53,8 +52,7 @@ describe("scoreMentor", () => {
 
   it("rewards coaching_intensity alignment with mentor style", () => {
     const input: MatchInput = {
-      profession: "Professional",
-      experienceLevel: "Intermediate",
+      careerLevel: "Senior Level",
       primaryGoal: null,
       mentorStyle: "balanced",
       coachingIntensity: "high",
@@ -66,8 +64,7 @@ describe("scoreMentor", () => {
 
   it("falls back to 'default_fallback' when nothing matches", () => {
     const input: MatchInput = {
-      profession: null,
-      experienceLevel: null,
+      careerLevel: null,
       primaryGoal: null,
       mentorStyle: "balanced",
       coachingIntensity: "medium",
@@ -82,8 +79,7 @@ describe("scoreMentor", () => {
 describe("pickBestMentor", () => {
   it("picks the mentor whose best_fit_goals includes the user's primary goal", () => {
     const input: MatchInput = {
-      profession: "Student",
-      experienceLevel: "Beginner",
+      careerLevel: "Senior Level",
       primaryGoal: "Improve Confidence",
       mentorStyle: "supportive",
       coachingIntensity: "low",
@@ -95,8 +91,7 @@ describe("pickBestMentor", () => {
 
   it("never leaves a user unmatched even when no mentor scores above zero", () => {
     const input: MatchInput = {
-      profession: null,
-      experienceLevel: null,
+      careerLevel: null,
       primaryGoal: null,
       mentorStyle: "balanced",
       coachingIntensity: "medium",
@@ -110,8 +105,7 @@ describe("pickBestMentor", () => {
 
   it("is deterministic across repeated calls with identical input", () => {
     const input: MatchInput = {
-      profession: null,
-      experienceLevel: null,
+      careerLevel: null,
       primaryGoal: null,
       mentorStyle: "balanced",
       coachingIntensity: "medium",
@@ -124,8 +118,7 @@ describe("pickBestMentor", () => {
 
   it("throws on an empty mentor list rather than silently returning undefined", () => {
     const input: MatchInput = {
-      profession: null,
-      experienceLevel: null,
+      careerLevel: null,
       primaryGoal: null,
       mentorStyle: "balanced",
       coachingIntensity: "medium",
