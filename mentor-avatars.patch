@@ -1,0 +1,3843 @@
+diff -ruN '--exclude=node_modules' '--exclude=.next' '--exclude=package-lock.json' '--exclude=tsconfig.tsbuildinfo' '--exclude=next-env.d.ts' '--exclude=.git' va-mentor-base/docs/MENTOR-REDEFINITION-NOTES.md va-avatars/docs/MENTOR-REDEFINITION-NOTES.md
+--- va-mentor-base/docs/MENTOR-REDEFINITION-NOTES.md	1970-01-01 00:00:00.000000000 +0000
++++ va-avatars/docs/MENTOR-REDEFINITION-NOTES.md	2026-07-23 02:13:25.986201609 +0000
+@@ -0,0 +1,72 @@
++# VAM — Mentor Redefinition Notes
++
++Companion to the Product Redefinition & Training Framework document.
++Covers what was actually built for the "mentor must not behave like a
++general chatbot" requirement, and what's still a documented gap.
++
++## What changed
++
++1. **All 4 seeded mentor personas rewritten** (migration 0025, a plain
++   `UPDATE`, not a versioned re-seed — persona copy has no compliance
++   requirement the way legal document text does, so it doesn't need
++   `legal_documents`' append-only/audit-trail treatment). Each keeps its
++   original style archetype (challenging/supportive/balanced/practice-
++   first) but is now explicitly framed as an Executive Communication
++   Coach, not a general assistant.
++
++2. **A platform-wide coaching philosophy is now injected into every
++   turn's system prompt** (`COACHING_PHILOSOPHY` in `src/lib/groq/
++   prompts.ts`), independent of which mentor is active: never fall back
++   to generic passive framing, challenge assumptions, enforce
++   recommendation-first communication ("Think First. Speak Second.").
++   This is a platform standard, not a per-mentor personality trait.
++
++3. **Proactive opening** — the mentor now speaks first. `/api/chat/
++   greet` is called automatically (`mentor-chat.tsx`, on mount) whenever
++   a session has zero messages, using a synthetic "kick off the
++   session" directive (`buildOpeningTurnDirective`) that's sent to Groq
++   but never shown to the user or persisted as a real message — only
++   the mentor's resulting reply is saved.
++
++## Honest gap: "yesterday's exercise" isn't a real thing yet
++
++The brief's example opening references a specific prior exercise and
++scores ("Yesterday's exercise showed improvement in clarity..."). There
++is no formal exercise/curriculum-tracking system in this codebase yet —
++that's the 30-day curriculum stage, not built. What the opening
++directive actually has available to reference honestly:
++
++- `progress_snapshots.day_streak` — a real number, can say "you're on a
++  4-day streak"
++- The most recent `memory_items` row of type `episodic_summary` (Stage
++  3's memory consolidation) — a real, if informal, note about a past
++  conversation
++
++The model is explicitly instructed not to fabricate specific exercises,
++scores, or sessions it has no real data for. Once the curriculum stage
++exists, this is the natural place to wire in "yesterday's assigned
++exercise" as a concrete, structured input rather than an
++LLM-summarized memory note.
++
++## Still not built (by design, not oversight)
++
++- **30-day curriculum** (weekly modules, structured program progression)
++  — a separate stage, not started.
++- **Industry-specific scenario content** (the brief's Accounting/
++  Business Development/HR/Executive scenario examples) — depends on the
++  curriculum stage existing first.
++- **VA Collective Intelligence Engine** — explicitly framed by the
++  brief itself as "Phase 2 strategic feature." Not touched. This one in
++  particular needs its own dedicated design pass before any code: what
++  "anonymized" concretely means, the actual re-identification risk
++  model, and the consent-tracking mechanism, not just two new tables.
++
++## Not live-tested
++
++Same standing caveat as every other Groq-calling code path in this
++project: `/api/chat/greet` has never been exercised against a real Groq
++key. The one thing worth specifically verifying once it is: that the
++opening message actually reads as proactive and specific rather than
++generic — prompt instructions are a strong lever, not a guarantee, and
++this is exactly the kind of behavior that's easy to get subtly wrong in
++practice even when the instructions are right on paper.
+diff -ruN '--exclude=node_modules' '--exclude=.next' '--exclude=package-lock.json' '--exclude=tsconfig.tsbuildinfo' '--exclude=next-env.d.ts' '--exclude=.git' va-mentor-base/docs/STAGE-6-VOICE-NOTES.md va-avatars/docs/STAGE-6-VOICE-NOTES.md
+--- va-mentor-base/docs/STAGE-6-VOICE-NOTES.md	1970-01-01 00:00:00.000000000 +0000
++++ va-avatars/docs/STAGE-6-VOICE-NOTES.md	2026-07-23 02:13:25.977358534 +0000
+@@ -0,0 +1,91 @@
++# VAM — Stage 6 Voice Architecture Notes
++
++## What "full real-time duplex" means here, concretely
++
++Groq's STT (`/audio/transcriptions`) and TTS (`/audio/speech`) are **REST
++endpoints, not a WebSocket/realtime streaming API.** There is no way to
++open one persistent bidirectional audio socket to Groq and stream raw
++audio both directions continuously — that class of product (OpenAI's
++Realtime API, ElevenLabs Conversational AI, etc.) is a fundamentally
++different architecture requiring a different provider and, usually, a
++dedicated always-on server rather than Vercel serverless functions.
++
++What's built instead is a genuinely duplex-**feeling** experience layered
++on top of the existing request/response pipeline, entirely client-side
++for the parts that need to be instant:
++
++1. **Automatic turn-taking (no push-to-talk button)** — `useVoiceActivityDetection`
++   samples mic energy every animation frame via the Web Audio API and
++   runs it through a simple RMS-threshold-with-hangover rule
++   (`src/lib/voice/vad.ts`). When it decides you've started talking, it
++   starts a `MediaRecorder` segment; when you go quiet for
++   `silenceTimeoutMs` (700ms default), it finalizes the segment and
++   sends it to `/api/voice/stt` — same endpoint push-to-talk already used.
++
++2. **Barge-in (interruption)** — the VAD's "speech started" signal fires
++   regardless of what the mentor is doing. If the mentor is still
++   generating text or already speaking it back, `handleBargeIn()` in
++   `mentor-chat.tsx` aborts the in-flight `/api/chat` fetch
++   (`AbortController`) and stops TTS playback immediately
++   (`TtsPlaybackQueue.stop()`). The abort signal is propagated all the
++   way to the upstream Groq fetch (`/api/chat/route.ts` passes
++   `request.signal` through to `streamChatCompletion`), so an
++   interruption actually cancels the generation server-side too — not
++   just something the client stops listening to while Groq keeps
++   generating (and billing) in the background.
++
++3. **Sentence-level streaming TTS** — rather than waiting for the whole
++   reply to finish generating before synthesizing speech,
++   `extractCompletedSentences` (`src/lib/voice/sentence-chunker.ts`)
++   watches the growing SSE text and fires a TTS request for each
++   completed sentence as soon as it appears. `TtsPlaybackQueue` plays
++   these in order through one `<audio>` element. This is the main lever
++   for cutting time-to-first-sound — it's the difference between
++   "wait 4 seconds then hear the whole answer" and "hear the first
++   sentence in under a second while the rest is still being written."
++
++None of this requires a WebSocket server, a different hosting model, or
++a different voice provider. It runs entirely within the existing
++Vercel serverless + Groq REST architecture.
++
++## Known limitations, stated plainly
++
++- **VAD is energy-threshold, not a trained model.** It will false-trigger
++  on loud background noise (a truck outside, a dog barking) and may
++  miss very quiet speech. A proper fix is a WASM-based VAD model (e.g.
++  a Silero VAD port) — meaningfully more accurate, but a real dependency
++  to add. Left as a documented upgrade path, not built here.
++- **Sentence-boundary detection is regex-based**, not a real NLP sentence
++  splitter. It handles common cases (periods, exclamation points,
++  question marks followed by whitespace) and has a minimum-length guard
++  to avoid splitting on things like "Dr." — but it isn't perfect, and
++  never fully can be with this approach.
++- **No echo cancellation between the mentor's TTS output and the mic
++  input.** If your speakers are audible to your own microphone (no
++  headphones, no browser-level acoustic echo cancellation beyond what
++  `getUserMedia`'s default constraints provide), the VAD could pick up
++  the mentor's own voice as "user speech" and trigger a false barge-in.
++  Recommend testing with headphones first; a more robust fix would
++  explicitly mute VAD processing while TTS audio is actively playing,
++  accepting a small usability tradeoff (you couldn't interrupt at all in
++  that case) — not implemented, since true barge-in was explicitly the
++  point of this stage.
++- **Segment-based STT, not streaming STT.** Groq's Whisper endpoint takes
++  a complete audio file, so transcription only starts after VAD decides
++  your utterance is over (after the silence timeout) — there's no
++  partial/live transcript while you're still talking.
++- **Not live-tested against a real Groq key** — same caveat as every
++  other Groq-calling function in this codebase (see
++  `docs/STAGE-2-3-4-NOTES.md`). The `/audio/speech` request shape in
++  particular has never been exercised against Groq's actual API.
++
++## If you later want genuine low-latency continuous streaming
++
++That requires a different provider built for it (OpenAI Realtime API,
++ElevenLabs Conversational AI, Deepgram's streaming STT, etc.) and
++usually a persistent connection your serverless functions can't hold
++open — a small dedicated WebSocket relay (Fly.io, Railway, a tiny
++always-on box) sitting between the browser and that provider. That's a
++genuinely separate infrastructure decision, not an incremental change
++to what's here — flag it explicitly if you want to go that direction
++later rather than assuming this stage's work carries forward directly.
+Binary files va-mentor-base/public/avatars/ava.png and va-avatars/public/avatars/ava.png differ
+Binary files va-mentor-base/public/avatars/elias.png and va-avatars/public/avatars/elias.png differ
+Binary files va-mentor-base/public/avatars/morgan.png and va-avatars/public/avatars/morgan.png differ
+Binary files va-mentor-base/public/avatars/priya.png and va-avatars/public/avatars/priya.png differ
+diff -ruN '--exclude=node_modules' '--exclude=.next' '--exclude=package-lock.json' '--exclude=tsconfig.tsbuildinfo' '--exclude=next-env.d.ts' '--exclude=.git' va-mentor-base/src/app/(app)/mentor/mentor-chat.tsx va-avatars/src/app/(app)/mentor/mentor-chat.tsx
+--- va-mentor-base/src/app/(app)/mentor/mentor-chat.tsx	2026-07-21 09:11:27.881777774 +0000
++++ va-avatars/src/app/(app)/mentor/mentor-chat.tsx	2026-07-23 02:13:26.179838125 +0000
+@@ -1,14 +1,17 @@
+ "use client";
+ 
+-import { useRef, useState } from "react";
++import { useEffect, useRef, useState } from "react";
+ import { Button } from "@/components/ui/button";
+ import { MessageBubble } from "@/components/chat/message-bubble";
+ import { MessageFeedback } from "@/components/chat/message-feedback";
+ import { VoiceGenderToggle } from "@/components/voice/voice-gender-toggle";
+ import { useVoiceRecorder } from "@/hooks/use-voice-recorder";
++import { useLiveConversation } from "@/hooks/use-live-conversation";
+ import { createClient } from "@/lib/supabase/client";
+ import { getMentorAvatar } from "@/lib/avatar/registry";
+ import { WaveformBars } from "@/components/waveform/waveform-bars";
++import { TtsPlaybackQueue } from "@/lib/voice/tts-playback-queue";
++import { extractCompletedSentences, flushRemainingBuffer, initialChunkerState } from "@/lib/voice/sentence-chunker";
+ import type { UserPreferences } from "@/types/database";
+ 
+ interface ChatMessage {
+@@ -17,6 +20,19 @@
+   id?: string;
+ }
+ 
++/**
++ * Stage 6 — Real-time duplex voice.
++ *
++ * Two voice modes coexist:
++ *  - Push-to-talk (existing, Stage 2): record on click, send on click.
++ *  - Live conversation (new): continuous mic stream, VAD auto-detects
++ *    utterances, and the user can interrupt the mentor mid-reply —
++ *    see docs/STAGE-6-VOICE-NOTES.md for the honest architecture
++ *    writeup (this is not literally continuous bidirectional audio
++ *    streaming — Groq's STT/TTS are REST endpoints, not a realtime
++ *    socket API — it's client-side VAD + barge-in + sentence-streamed
++ *    TTS layered on the existing request/response pipeline).
++ */
+ export function MentorChat(props: {
+   mentorSlug: string | null;
+   mentorName: string;
+@@ -33,31 +49,75 @@
+   const [draft, setDraft] = useState("");
+   const [isSending, setIsSending] = useState(false);
+   const [voiceError, setVoiceError] = useState<string | null>(null);
++  const [liveModeOn, setLiveModeOn] = useState(false);
+   const audioRef = useRef<HTMLAudioElement | null>(null);
++  const ttsQueueRef = useRef<TtsPlaybackQueue | null>(null);
++  const chunkerStateRef = useRef(initialChunkerState);
++  const abortControllerRef = useRef<AbortController | null>(null);
+   const recorder = useVoiceRecorder();
+ 
+-  async function send(text: string, inputMode: "text" | "voice") {
+-    if (!text.trim() || isSending) return;
+-    setIsSending(true);
+-    setMessages((prev) => [...prev, { role: "user", content: text }]);
+-    setDraft("");
++  useEffect(() => {
++    if (audioRef.current && !ttsQueueRef.current) {
++      ttsQueueRef.current = new TtsPlaybackQueue(audioRef.current);
++    }
++  }, []);
++
++  const liveConversation = useLiveConversation({
++    onSpeechStart: handleBargeIn,
++    onUtterance: (blob) => {
++      void transcribeAndSend(blob);
++    },
++  });
++
++  /**
++   * Barge-in: fires the instant VAD detects the user talking, whether
++   * the mentor is still generating text or already speaking it back.
++   * Aborting the fetch here propagates to the server (request.signal
++   * in /api/chat) and on to the upstream Groq call, so generation
++   * actually stops rather than just being ignored client-side.
++   */
++  function handleBargeIn() {
++    abortControllerRef.current?.abort();
++    ttsQueueRef.current?.stop();
++  }
++
++  async function transcribeAndSend(blob: Blob) {
++    const form = new FormData();
++    form.append("audio", blob, "voice-note.webm");
++    const res = await fetch("/api/voice/stt", { method: "POST", body: form });
++    if (!res.ok) {
++      setVoiceError("Could not transcribe that.");
++      return;
++    }
++    const { transcript } = await res.json();
++    if (transcript) {
++      void send(transcript, "voice");
++    }
++  }
+ 
++  async function streamMentorTurn(url: string, body: Record<string, unknown>) {
++    ttsQueueRef.current?.reset();
++    chunkerStateRef.current = initialChunkerState;
+     let mentorReply = "";
+     setMessages((prev) => [...prev, { role: "mentor", content: "" }]);
+ 
++    const controller = new AbortController();
++    abortControllerRef.current = controller;
++
+     try {
+-      const res = await fetch("/api/chat", {
++      const res = await fetch(url, {
+         method: "POST",
+         headers: { "Content-Type": "application/json" },
+-        body: JSON.stringify({ sessionId, message: text, inputMode }),
++        body: JSON.stringify(body),
++        signal: controller.signal,
+       });
+ 
+       const newSessionId = res.headers.get("X-Session-Id");
+       if (newSessionId) setSessionId(newSessionId);
+ 
+       if (!res.ok || !res.body) {
+-        const body = await res.json().catch(() => null);
+-        throw new Error(body?.error?.message ?? "The mentor is temporarily unavailable.");
++        const errBody = await res.json().catch(() => null);
++        throw new Error(errBody?.error?.message ?? "The mentor is temporarily unavailable.");
+       }
+ 
+       const reader = res.body.getReader();
+@@ -86,6 +146,17 @@
+                 next[next.length - 1] = { role: "mentor", content: mentorReply };
+                 return next;
+               });
++
++              if (props.voiceEnabled) {
++                const { newSentences, nextState } = extractCompletedSentences(
++                  mentorReply,
++                  chunkerStateRef.current,
++                );
++                chunkerStateRef.current = nextState;
++                for (const sentence of newSentences) {
++                  ttsQueueRef.current?.enqueue(sentence);
++                }
++              }
+             }
+           } catch {
+             // Ignore malformed SSE chunks.
+@@ -93,23 +164,61 @@
+         }
+       }
+ 
+-      if (props.voiceEnabled && mentorReply) {
+-        void playMentorReply(mentorReply);
++      if (props.voiceEnabled) {
++        const trailing = flushRemainingBuffer(chunkerStateRef.current);
++        if (trailing) ttsQueueRef.current?.enqueue(trailing);
+       }
+ 
+       void attachMentorMessageId(sessionId ?? newSessionId);
+     } catch (err) {
+-      const message = err instanceof Error ? err.message : "Something went wrong.";
+-      setMessages((prev) => {
+-        const next = [...prev];
+-        next[next.length - 1] = { role: "mentor", content: `(${message})` };
+-        return next;
+-      });
++      const isAbort = err instanceof DOMException && err.name === "AbortError";
++      if (!isAbort) {
++        const message = err instanceof Error ? err.message : "Something went wrong.";
++        setMessages((prev) => {
++          const next = [...prev];
++          next[next.length - 1] = { role: "mentor", content: `(${message})` };
++          return next;
++        });
++      }
++      // An abort means the user interrupted on purpose (barge-in) —
++      // leave whatever partial reply was already shown, no error banner.
+     } finally {
+       setIsSending(false);
++      if (liveModeOn) liveConversation.resumeListening();
+     }
+   }
+ 
++  async function send(text: string, inputMode: "text" | "voice") {
++    if (!text.trim() || isSending) return;
++    setIsSending(true);
++    setMessages((prev) => [...prev, { role: "user", content: text }]);
++    setDraft("");
++    await streamMentorTurn("/api/chat", { sessionId, message: text, inputMode });
++  }
++
++  /**
++   * Product Redefinition — Mentor Redefinition, proactive opening.
++   * Called once on mount when this is a brand-new (zero-message)
++   * session — the mentor speaks first, per the brief's requirement
++   * that VA never wait passively to be asked "what can I help with".
++   * No user message bubble is added; /api/chat/greet doesn't persist
++   * one either (see that route's docstring).
++   */
++  async function triggerGreeting() {
++    if (isSending) return;
++    setIsSending(true);
++    await streamMentorTurn("/api/chat/greet", { sessionId });
++  }
++
++  useEffect(() => {
++    if (props.initialHistory.length === 0) {
++      void triggerGreeting();
++    }
++    // Intentionally mount-only — this greets once when the session
++    // starts empty, not every time some unrelated prop changes.
++    // eslint-disable-next-line react-hooks/exhaustive-deps
++  }, []);
++
+   async function attachMentorMessageId(activeSessionId: string | null) {
+     if (!activeSessionId) return;
+     // persistFullReply (server-side) writes the mentor message
+@@ -140,26 +249,6 @@
+     }
+   }
+ 
+-  async function playMentorReply(text: string) {
+-    try {
+-      const res = await fetch("/api/voice/tts", {
+-        method: "POST",
+-        headers: { "Content-Type": "application/json" },
+-        body: JSON.stringify({ text }),
+-      });
+-      if (!res.ok) return;
+-      const blob = await res.blob();
+-      const url = URL.createObjectURL(blob);
+-      if (audioRef.current) {
+-        audioRef.current.src = url;
+-        await audioRef.current.play().catch(() => undefined);
+-      }
+-    } catch {
+-      // Voice playback is additive — a failure here should not disrupt
+-      // the text conversation already shown.
+-    }
+-  }
+-
+   async function handleMicClick() {
+     setVoiceError(null);
+     if (recorder.state === "idle") {
+@@ -170,21 +259,28 @@
+     if (recorder.state === "recording") {
+       const blob = await recorder.stop();
+       if (!blob) return;
++      void transcribeAndSend(blob);
++    }
++  }
+ 
+-      const form = new FormData();
+-      form.append("audio", blob, "voice-note.webm");
+-      const res = await fetch("/api/voice/stt", { method: "POST", body: form });
+-      if (!res.ok) {
+-        setVoiceError("Could not transcribe that. Please try typing instead.");
+-        return;
+-      }
+-      const { transcript } = await res.json();
+-      if (transcript) {
+-        void send(transcript, "voice");
+-      }
++  function toggleLiveMode() {
++    if (liveModeOn) {
++      liveConversation.stop();
++      setLiveModeOn(false);
++    } else {
++      setVoiceError(null);
++      void liveConversation.start();
++      setLiveModeOn(true);
+     }
+   }
+ 
++  const liveStateLabel: Record<string, string> = {
++    idle: "",
++    listening: "Listening…",
++    "user-speaking": "Hearing you…",
++    processing: "Thinking…",
++  };
++
+   return (
+     <div className="flex h-[calc(100vh-9rem)] flex-col">
+       <div className="mb-4 flex items-center justify-between border-b border-ink/10 dark:border-white/10 pb-4">
+@@ -193,7 +289,12 @@
+           <div>
+             <h1 className="font-display text-xl font-medium text-ink dark:text-white">{props.mentorName}</h1>
+             {props.mentorTagline ? <p className="text-sm text-ink/60 dark:text-white/60">{props.mentorTagline}</p> : null}
+-            <WaveformBars active={isSending} className="mt-1 h-3" />
++            <div className="mt-1 flex items-center gap-2">
++              <WaveformBars active={isSending || liveConversation.state === "user-speaking"} className="h-3" />
++              {liveModeOn ? (
++                <span className="text-xs text-current-500">{liveStateLabel[liveConversation.state]}</span>
++              ) : null}
++            </div>
+           </div>
+         </div>
+         <VoiceGenderToggle initialValue={props.initialVoiceGender} />
+@@ -201,7 +302,7 @@
+ 
+       <div className="flex-1 space-y-3 overflow-y-auto py-2">
+         {messages.length === 0 ? (
+-          <p className="text-sm text-ink/40 dark:text-white/40">Say hello to start your first conversation.</p>
++          <p className="text-sm text-ink/40 dark:text-white/40">Your mentor is getting started…</p>
+         ) : (
+         messages.map((m, i) => (
+           <div key={i}>
+@@ -217,6 +318,7 @@
+       </div>
+ 
+       {voiceError ? <p className="mb-2 text-xs text-red-600">{voiceError}</p> : null}
++      {liveConversation.error ? <p className="mb-2 text-xs text-red-600">{liveConversation.error}</p> : null}
+ 
+       <form
+         onSubmit={(e) => {
+@@ -241,12 +343,21 @@
+         />
+         <Button
+           type="button"
++          variant={liveModeOn ? "primary" : "secondary"}
++          onClick={toggleLiveMode}
++          title="Hands-free live conversation — auto-detects when you talk, and you can interrupt the mentor"
++        >
++          {liveModeOn ? "End live" : "Go live"}
++        </Button>
++        <Button
++          type="button"
+           variant={recorder.state === "recording" ? "primary" : "secondary"}
+           onClick={handleMicClick}
++          disabled={liveModeOn}
+         >
+           {recorder.state === "recording" ? "Stop" : "🎙"}
+         </Button>
+-        <Button type="submit" isLoading={isSending}>
++        <Button type="submit" isLoading={isSending} disabled={liveModeOn}>
+           Send
+         </Button>
+       </form>
+diff -ruN '--exclude=node_modules' '--exclude=.next' '--exclude=package-lock.json' '--exclude=tsconfig.tsbuildinfo' '--exclude=next-env.d.ts' '--exclude=.git' va-mentor-base/src/app/(app)/onboarding/onboarding-form.tsx va-avatars/src/app/(app)/onboarding/onboarding-form.tsx
+--- va-mentor-base/src/app/(app)/onboarding/onboarding-form.tsx	2026-07-21 09:11:27.882534198 +0000
++++ va-avatars/src/app/(app)/onboarding/onboarding-form.tsx	2026-07-23 02:13:26.182048737 +0000
+@@ -8,21 +8,10 @@
+ import { Label } from "@/components/ui/label";
+ import { FormAlert } from "@/components/ui/form-alert";
+ import { LEGAL_SLUG_ROUTES } from "@/lib/legal/routes";
++import { CAREER_LEVELS, COUNTRIES } from "@/lib/onboarding/constants";
+ 
+ const TIMEZONES = Intl.supportedValuesOf ? Intl.supportedValuesOf("timeZone") : ["UTC"];
+ 
+-const PROFESSIONS = [
+-  "Student",
+-  "Professional",
+-  "Manager",
+-  "Executive",
+-  "Founder",
+-  "Consultant",
+-  "Job Seeker",
+-] as const;
+-
+-const EXPERIENCE_LEVELS = ["Beginner", "Intermediate", "Advanced"] as const;
+-
+ const PRIMARY_GOALS = [
+   "Improve Confidence",
+   "Executive Presence",
+@@ -39,11 +28,28 @@
+   slug: string;
+ }
+ 
++interface ReferenceOption {
++  id: string;
++  name: string;
++}
++
++/** Shared select styling — kept as one constant so every dropdown stays visually consistent. */
++const SELECT_CLASSNAME =
++  "h-11 w-full rounded-xl border border-ink/10 dark:border-white/10 px-3 text-sm outline-none " +
++  "focus:border-signal-500 focus:ring-2 focus:ring-signal-500/30 bg-white dark:bg-ink-soft " +
++  "text-ink dark:text-white";
++
+ export function OnboardingForm({
+   defaultDisplayName,
++  industries,
++  functionalAreas,
++  currentRoles,
+   requiredDocuments,
+ }: {
+   defaultDisplayName: string;
++  industries: ReferenceOption[];
++  functionalAreas: ReferenceOption[];
++  currentRoles: ReferenceOption[];
+   requiredDocuments: RequiredDocument[];
+ }) {
+   const router = useRouter();
+@@ -51,8 +57,12 @@
+   const [timezone, setTimezone] = useState(
+     Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
+   );
+-  const [profession, setProfession] = useState<string>("");
+-  const [experienceLevel, setExperienceLevel] = useState<string>("");
++  const [country, setCountry] = useState<string>("");
++  const [organizationName, setOrganizationName] = useState("");
++  const [industryId, setIndustryId] = useState<string>("");
++  const [functionalAreaId, setFunctionalAreaId] = useState<string>("");
++  const [currentRoleId, setCurrentRoleId] = useState<string>("");
++  const [careerLevel, setCareerLevel] = useState<string>("");
+   const [primaryGoal, setPrimaryGoal] = useState<string>("");
+   const [legalAccepted, setLegalAccepted] = useState(false);
+   const [isLoading, setIsLoading] = useState(false);
+@@ -75,8 +85,12 @@
+       body: JSON.stringify({
+         displayName,
+         timezone,
+-        profession: profession || undefined,
+-        experienceLevel: experienceLevel || undefined,
++        country: country || undefined,
++        organizationName: organizationName || undefined,
++        industryId: industryId || undefined,
++        functionalAreaId: functionalAreaId || undefined,
++        currentRoleId: currentRoleId || undefined,
++        careerLevel: careerLevel || undefined,
+         primaryGoal: primaryGoal || undefined,
+         acceptedDocumentIds: requiredDocuments.map((doc) => doc.id),
+       }),
+@@ -99,7 +113,7 @@
+       {error ? <FormAlert tone="error" message={error} /> : null}
+ 
+       <div>
+-        <Label htmlFor="displayName">What should your mentor call you?</Label>
++        <Label htmlFor="displayName">Full name</Label>
+         <Input
+           id="displayName"
+           value={displayName}
+@@ -109,52 +123,113 @@
+         />
+       </div>
+ 
++      <div className="grid grid-cols-2 gap-3">
++        <div>
++          <Label htmlFor="country">Country</Label>
++          <select
++            id="country"
++            value={country}
++            onChange={(e) => setCountry(e.target.value)}
++            className={SELECT_CLASSNAME}
++          >
++            <option value="">Prefer not to say</option>
++            {COUNTRIES.map((option) => (
++              <option key={option} value={option}>
++                {option}
++              </option>
++            ))}
++          </select>
++        </div>
++        <div>
++          <Label htmlFor="timezone">Timezone</Label>
++          <select
++            id="timezone"
++            value={timezone}
++            onChange={(e) => setTimezone(e.target.value)}
++            className={SELECT_CLASSNAME}
++          >
++            {TIMEZONES.map((tz) => (
++              <option key={tz} value={tz}>
++                {tz}
++              </option>
++            ))}
++          </select>
++        </div>
++      </div>
++
+       <div>
+-        <Label htmlFor="timezone">Timezone</Label>
+-        <select
+-          id="timezone"
+-          value={timezone}
+-          onChange={(e) => setTimezone(e.target.value)}
+-          className="h-11 w-full rounded-xl border border-ink/10 dark:border-white/10 px-3 text-sm outline-none
+-            focus:border-signal-500 focus:ring-2 focus:ring-signal-500/30"
+-        >
+-          {TIMEZONES.map((tz) => (
+-            <option key={tz} value={tz}>
+-              {tz}
+-            </option>
+-          ))}
+-        </select>
++        <Label htmlFor="organizationName">Organization</Label>
++        <Input
++          id="organizationName"
++          value={organizationName}
++          onChange={(e) => setOrganizationName(e.target.value)}
++          placeholder="e.g. Acme Bank"
++          maxLength={160}
++        />
+       </div>
+ 
+       <div>
+-        <Label htmlFor="profession">Which best describes you?</Label>
++        <Label htmlFor="industry">Industry</Label>
+         <select
+-          id="profession"
+-          value={profession}
+-          onChange={(e) => setProfession(e.target.value)}
+-          className="h-11 w-full rounded-xl border border-ink/10 dark:border-white/10 px-3 text-sm outline-none
+-            focus:border-signal-500 focus:ring-2 focus:ring-signal-500/30"
++          id="industry"
++          value={industryId}
++          onChange={(e) => setIndustryId(e.target.value)}
++          className={SELECT_CLASSNAME}
+         >
+           <option value="">Prefer not to say</option>
+-          {PROFESSIONS.map((option) => (
+-            <option key={option} value={option}>
+-              {option}
++          {industries.map((option) => (
++            <option key={option.id} value={option.id}>
++              {option.name}
+             </option>
+           ))}
+         </select>
+       </div>
+ 
++      <div className="grid grid-cols-2 gap-3">
++        <div>
++          <Label htmlFor="functionalArea">Functional area</Label>
++          <select
++            id="functionalArea"
++            value={functionalAreaId}
++            onChange={(e) => setFunctionalAreaId(e.target.value)}
++            className={SELECT_CLASSNAME}
++          >
++            <option value="">Prefer not to say</option>
++            {functionalAreas.map((option) => (
++              <option key={option.id} value={option.id}>
++                {option.name}
++              </option>
++            ))}
++          </select>
++        </div>
++        <div>
++          <Label htmlFor="currentRole">Current role</Label>
++          <select
++            id="currentRole"
++            value={currentRoleId}
++            onChange={(e) => setCurrentRoleId(e.target.value)}
++            className={SELECT_CLASSNAME}
++          >
++            <option value="">Prefer not to say</option>
++            {currentRoles.map((option) => (
++              <option key={option.id} value={option.id}>
++                {option.name}
++              </option>
++            ))}
++          </select>
++        </div>
++      </div>
++
+       <div>
+-        <Label htmlFor="experienceLevel">Communication experience level</Label>
++        <Label htmlFor="careerLevel">Career level</Label>
+         <select
+-          id="experienceLevel"
+-          value={experienceLevel}
+-          onChange={(e) => setExperienceLevel(e.target.value)}
+-          className="h-11 w-full rounded-xl border border-ink/10 dark:border-white/10 px-3 text-sm outline-none
+-            focus:border-signal-500 focus:ring-2 focus:ring-signal-500/30"
++          id="careerLevel"
++          value={careerLevel}
++          onChange={(e) => setCareerLevel(e.target.value)}
++          className={SELECT_CLASSNAME}
+         >
+           <option value="">Prefer not to say</option>
+-          {EXPERIENCE_LEVELS.map((option) => (
++          {CAREER_LEVELS.map((option) => (
+             <option key={option} value={option}>
+               {option}
+             </option>
+@@ -168,8 +243,7 @@
+           id="primaryGoal"
+           value={primaryGoal}
+           onChange={(e) => setPrimaryGoal(e.target.value)}
+-          className="h-11 w-full rounded-xl border border-ink/10 dark:border-white/10 px-3 text-sm outline-none
+-            focus:border-signal-500 focus:ring-2 focus:ring-signal-500/30"
++          className={SELECT_CLASSNAME}
+         >
+           <option value="">Prefer not to say</option>
+           {PRIMARY_GOALS.map((option) => (
+diff -ruN '--exclude=node_modules' '--exclude=.next' '--exclude=package-lock.json' '--exclude=tsconfig.tsbuildinfo' '--exclude=next-env.d.ts' '--exclude=.git' va-mentor-base/src/app/(app)/onboarding/page.tsx va-avatars/src/app/(app)/onboarding/page.tsx
+--- va-mentor-base/src/app/(app)/onboarding/page.tsx	2026-07-21 09:11:27.883196460 +0000
++++ va-avatars/src/app/(app)/onboarding/page.tsx	2026-07-23 02:13:26.183365602 +0000
+@@ -33,17 +33,27 @@
+   // client) rather than hardcoded in the form, so the version a user
+   // actually reads/accepts always matches what's currently published
+   // (migration 0007 + docs/adr/ADR-004-legal-acceptance-audit-design.md).
+-  const requiredDocuments = await getRequiredLegalDocuments(supabase);
++  const [requiredDocuments, { data: industries }, { data: functionalAreas }, { data: currentRoles }] =
++    await Promise.all([
++      getRequiredLegalDocuments(supabase),
++      supabase.from("industries").select("id, name").eq("is_active", true).order("name"),
++      supabase.from("functional_areas").select("id, name").eq("is_active", true).order("name"),
++      supabase.from("current_roles").select("id, name").eq("is_active", true).order("name"),
++    ]);
+ 
+   return (
+-    <div className="mx-auto flex min-h-screen max-w-md flex-col justify-center px-4 py-16">
+-      <h1 className="text-2xl font-semibold text-ink dark:text-white">Let&apos;s set you up</h1>
++    <div className="mx-auto flex min-h-screen max-w-lg flex-col justify-center px-4 py-16">
++      <h1 className="font-display text-2xl font-medium text-ink dark:text-white">Let&apos;s set you up</h1>
+       <p className="mt-1 text-sm text-ink/60 dark:text-white/60">
+-        A couple of quick details before you meet your mentor.
++        A few details about your professional background — this is what lets VAM personalize your
++        mentor, scenarios, and training to your actual role, not a generic template.
+       </p>
+       <div className="mt-8">
+         <OnboardingForm
+           defaultDisplayName={profile?.display_name ?? ""}
++          industries={industries ?? []}
++          functionalAreas={functionalAreas ?? []}
++          currentRoles={currentRoles ?? []}
+           requiredDocuments={requiredDocuments.map((doc) => ({
+             id: doc.id,
+             name: doc.name,
+diff -ruN '--exclude=node_modules' '--exclude=.next' '--exclude=package-lock.json' '--exclude=tsconfig.tsbuildinfo' '--exclude=next-env.d.ts' '--exclude=.git' va-mentor-base/src/app/(auth)/update-password/page.tsx va-avatars/src/app/(auth)/update-password/page.tsx
+--- va-mentor-base/src/app/(auth)/update-password/page.tsx	2026-07-21 09:11:27.884825081 +0000
++++ va-avatars/src/app/(auth)/update-password/page.tsx	2026-07-23 02:13:26.240822519 +0000
+@@ -46,8 +46,8 @@
+ 
+   return (
+     <div className="mx-auto flex min-h-screen max-w-sm flex-col justify-center px-4 py-16">
+-      <h1 className="text-2xl font-semibold text-slate-900">Choose a new password</h1>
+-      <p className="mt-1 text-sm text-slate-500">Create a strong password for your account.</p>
++      <h1 className="text-2xl font-semibold text-ink dark:text-white">Choose a new password</h1>
++      <p className="mt-1 text-sm text-ink/60 dark:text-white/60">Create a strong password for your account.</p>
+ 
+       <form onSubmit={handleSubmit} className="mt-8 space-y-4">
+         {error ? <FormAlert tone="error" message={error} /> : null}
+diff -ruN '--exclude=node_modules' '--exclude=.next' '--exclude=package-lock.json' '--exclude=tsconfig.tsbuildinfo' '--exclude=next-env.d.ts' '--exclude=.git' va-mentor-base/src/app/api/chat/greet/route.ts va-avatars/src/app/api/chat/greet/route.ts
+--- va-mentor-base/src/app/api/chat/greet/route.ts	1970-01-01 00:00:00.000000000 +0000
++++ va-avatars/src/app/api/chat/greet/route.ts	2026-07-23 02:13:26.246616094 +0000
+@@ -0,0 +1,117 @@
++import { NextResponse } from "next/server";
++import { verifyAuthenticatedUser } from "@/lib/supabase/auth-guard";
++import { createAdminClient } from "@/lib/supabase/admin";
++import { getOrAssignMentor } from "@/lib/mentor/assignment";
++import { loadSystemPrompt, loadProgressSummary } from "@/lib/chat/prompt-context";
++import { persistMentorReply } from "@/lib/chat/persist-reply";
++import { buildOpeningTurnDirective } from "@/lib/groq/prompts";
++import { streamChatCompletion } from "@/lib/groq/client";
++
++/**
++ * Product Redefinition — Mentor Redefinition, proactive opening.
++ *
++ * POST { sessionId: string | null } -> text/event-stream of the
++ * mentor's proactive opening message.
++ *
++ * The brief is explicit that the mentor "must proactively guide the
++ * user" and gives a concrete example: naming who they are, their
++ * objective, referencing recent progress, and closing with a specific
++ * time-boxed challenge — never a passive "what can I help you with
++ * today?" This route is what makes that the *first* thing a user sees
++ * in a session, rather than an empty chat waiting for them to speak
++ * first.
++ *
++ * Only called by the client when a session has zero messages
++ * (mentor-chat.tsx checks this) — calling it on a session that
++ * already has history would just inject an out-of-place greeting
++ * mid-conversation, so this route doesn't try to guard against that
++ * itself; the client owns deciding *when* to greet.
++ *
++ * Unlike /api/chat, there is no real user message here — the "kick
++ * off" directive (buildOpeningTurnDirective) is synthetic, sent as the
++ * user-role turn to Groq but never persisted as a messages row and
++ * never shown in the UI. Only the mentor's resulting reply is
++ * persisted. recordActivity is explicitly false when persisting it —
++ * the user hasn't done anything yet, the mentor spoke first, so this
++ * shouldn't count toward their day streak.
++ */
++export async function POST(request: Request) {
++  const auth = await verifyAuthenticatedUser();
++  if (!auth.ok) return auth.response;
++  const { user } = auth.data;
++
++  const body = await request.json().catch(() => ({}));
++  const sessionId: string | null = typeof body?.sessionId === "string" ? body.sessionId : null;
++
++  const chatModel = process.env.GROQ_MODEL_CHAT;
++  const utilityModel = process.env.GROQ_MODEL_UTILITY;
++  if (!chatModel || !utilityModel) {
++    return NextResponse.json(
++      { error: { code: "UPSTREAM_ERROR", message: "Groq model configuration is missing" } },
++      { status: 502 },
++    );
++  }
++
++  const admin = createAdminClient();
++
++  try {
++    const mentor = await getOrAssignMentor(user.id);
++
++    let activeSessionId = sessionId;
++    if (!activeSessionId) {
++      const { data: session, error: sessionError } = await admin
++        .from("conversation_sessions")
++        .insert({ user_id: user.id, mentor_id: mentor.id })
++        .select("id")
++        .single();
++      if (sessionError || !session) {
++        throw new Error(`failed to create session: ${sessionError?.message}`);
++      }
++      activeSessionId = session.id;
++    }
++
++    const [systemPrompt, progress] = await Promise.all([
++      loadSystemPrompt(admin, user.id, mentor),
++      loadProgressSummary(admin, user.id),
++    ]);
++
++    const openingDirective = buildOpeningTurnDirective(progress);
++
++    const groqResponse = await streamChatCompletion({
++      model: chatModel,
++      messages: [
++        { role: "system", content: systemPrompt },
++        { role: "user", content: openingDirective },
++      ],
++      signal: request.signal,
++    });
++
++    const [clientStream, persistStream] = groqResponse.body!.tee();
++
++    void persistMentorReply({
++      admin,
++      sessionId: activeSessionId,
++      userId: user.id,
++      utilityModel,
++      stream: persistStream,
++      recordActivity: false,
++    });
++
++    await admin
++      .from("conversation_sessions")
++      .update({ last_message_at: new Date().toISOString() })
++      .eq("id", activeSessionId);
++
++    return new Response(clientStream, {
++      headers: {
++        "Content-Type": "text/event-stream",
++        "Cache-Control": "no-cache",
++        Connection: "keep-alive",
++        "X-Session-Id": activeSessionId,
++      },
++    });
++  } catch (err) {
++    const message = err instanceof Error ? err.message : "Unknown error";
++    return NextResponse.json({ error: { code: "UPSTREAM_ERROR", message } }, { status: 502 });
++  }
++}
+diff -ruN '--exclude=node_modules' '--exclude=.next' '--exclude=package-lock.json' '--exclude=tsconfig.tsbuildinfo' '--exclude=next-env.d.ts' '--exclude=.git' va-mentor-base/src/app/api/chat/route.ts va-avatars/src/app/api/chat/route.ts
+--- va-mentor-base/src/app/api/chat/route.ts	2026-07-21 09:11:27.886456105 +0000
++++ va-avatars/src/app/api/chat/route.ts	2026-07-23 02:13:26.244913045 +0000
+@@ -3,12 +3,8 @@
+ import { verifyAuthenticatedUser } from "@/lib/supabase/auth-guard";
+ import { createAdminClient } from "@/lib/supabase/admin";
+ import { getOrAssignMentor } from "@/lib/mentor/assignment";
+-import { getRelevantMemories } from "@/lib/memory/retrieval";
+-import { extractMemoriesFromMessages } from "@/lib/memory/extraction";
+-import { consolidateMemoriesIfNeeded } from "@/lib/memory/consolidation";
+-import { pickRelevantFramework } from "@/lib/coaching/frameworks";
+-import { recordActivitySnapshot } from "@/lib/progress/activity";
+-import { buildSystemPrompt } from "@/lib/groq/prompts";
++import { loadSystemPrompt } from "@/lib/chat/prompt-context";
++import { persistMentorReply } from "@/lib/chat/persist-reply";
+ import { streamChatCompletion, type GroqMessage } from "@/lib/groq/client";
+ 
+ const bodySchema = z.object({
+@@ -18,7 +14,6 @@
+ });
+ 
+ const SHORT_TERM_CONTEXT_MESSAGES = 20;
+-const MEMORY_EXTRACTION_TRIGGER_EVERY_N_MESSAGES = 6;
+ 
+ /**
+  * Stage 2.3 — Groq Integration / Stage 2.1 — Mentor Domain Model.
+@@ -33,6 +28,10 @@
+  *
+  * A null sessionId creates a new conversation_session, assigning a
+  * mentor via getOrAssignMentor() if the user doesn't have one yet.
++ *
++ * See /api/chat/greet/route.ts for the proactive-opening counterpart
++ * (Product Redefinition — Mentor Redefinition) — this route always
++ * expects a real user message; greet never does.
+  */
+ export async function POST(request: Request) {
+   const auth = await verifyAuthenticatedUser();
+@@ -75,32 +74,15 @@
+       activeSessionId = session.id;
+     }
+ 
+-    const [{ data: profile }, { data: preferences }, { data: goals }, { data: frameworks }, memories, { data: history }] =
+-      await Promise.all([
+-        admin
+-          .from("profiles")
+-          .select("display_name, primary_goal, experience_level")
+-          .eq("id", user.id)
+-          .single(),
+-        admin
+-          .from("user_preferences")
+-          .select("coaching_intensity, mentor_style")
+-          .eq("user_id", user.id)
+-          .single(),
+-        admin.from("goals").select("title, status").eq("user_id", user.id).eq("status", "active"),
+-        admin.from("coaching_frameworks").select("*").eq("is_active", true),
+-        getRelevantMemories(admin, user.id),
+-        admin
+-          .from("messages")
+-          .select("role, content")
+-          .eq("session_id", activeSessionId)
+-          .order("created_at", { ascending: false })
+-          .limit(SHORT_TERM_CONTEXT_MESSAGES),
+-      ]);
+-
+-    if (!profile || !preferences) {
+-      throw new Error("failed to load profile/preferences for prompt assembly");
+-    }
++    const [systemPrompt, { data: history }] = await Promise.all([
++      loadSystemPrompt(admin, user.id, mentor),
++      admin
++        .from("messages")
++        .select("role, content")
++        .eq("session_id", activeSessionId)
++        .order("created_at", { ascending: false })
++        .limit(SHORT_TERM_CONTEXT_MESSAGES),
++    ]);
+ 
+     const { error: userMessageError } = await admin.from("messages").insert({
+       session_id: activeSessionId,
+@@ -113,17 +95,6 @@
+       throw new Error(`failed to persist user message: ${userMessageError.message}`);
+     }
+ 
+-    const framework = pickRelevantFramework(frameworks ?? [], profile.primary_goal);
+-
+-    const systemPrompt = buildSystemPrompt({
+-      mentor,
+-      profile,
+-      preferences,
+-      memories,
+-      goals: goals ?? [],
+-      framework,
+-    });
+-
+     const shortTermContext: GroqMessage[] = (history ?? [])
+       .slice()
+       .reverse()
+@@ -139,6 +110,12 @@
+         ...shortTermContext,
+         { role: "user", content: message },
+       ],
++      // Stage 6 barge-in: if the client aborts this fetch (user started
++      // talking over the mentor), that cancellation propagates here and
++      // actually stops the upstream Groq generation, rather than just
++      // the client ignoring a reply that's still being generated and
++      // billed for server-side.
++      signal: request.signal,
+     });
+ 
+     // Tee the upstream stream: one branch goes to the client immediately,
+@@ -146,7 +123,7 @@
+     // persisted once streaming completes.
+     const [clientStream, persistStream] = groqResponse.body!.tee();
+ 
+-    void persistFullReply({
++    void persistMentorReply({
+       admin,
+       sessionId: activeSessionId,
+       userId: user.id,
+@@ -172,93 +149,3 @@
+     return NextResponse.json({ error: { code: "UPSTREAM_ERROR", message } }, { status: 502 });
+   }
+ }
+-
+-/**
+- * Buffers the Groq SSE stream to reconstruct the full assistant reply,
+- * persists it, then (every N messages) triggers memory extraction.
+- * Runs after the response has already been returned to the client —
+- * failures here are logged, never surfaced to the user, per
+- * extractMemoriesFromMessages's documented contract.
+- */
+-async function persistFullReply(params: {
+-  admin: ReturnType<typeof createAdminClient>;
+-  sessionId: string;
+-  userId: string;
+-  utilityModel: string;
+-  stream: ReadableStream<Uint8Array>;
+-}) {
+-  try {
+-    const text = await readGroqSseText(params.stream);
+-    if (!text) return;
+-
+-    await params.admin.from("messages").insert({
+-      session_id: params.sessionId,
+-      user_id: params.userId,
+-      role: "mentor",
+-      content: text,
+-    });
+-
+-    await recordActivitySnapshot(params.userId);
+-
+-    const { count } = await params.admin
+-      .from("messages")
+-      .select("id", { count: "exact", head: true })
+-      .eq("session_id", params.sessionId);
+-
+-    if (count && count % MEMORY_EXTRACTION_TRIGGER_EVERY_N_MESSAGES === 0) {
+-      const { data: recent } = await params.admin
+-        .from("messages")
+-        .select("role, content")
+-        .eq("session_id", params.sessionId)
+-        .order("created_at", { ascending: false })
+-        .limit(MEMORY_EXTRACTION_TRIGGER_EVERY_N_MESSAGES);
+-
+-      await extractMemoriesFromMessages({
+-        userId: params.userId,
+-        utilityModel: params.utilityModel,
+-        recentMessages: (recent ?? []).slice().reverse(),
+-      });
+-
+-      await consolidateMemoriesIfNeeded({
+-        userId: params.userId,
+-        utilityModel: params.utilityModel,
+-      });
+-    }
+-  } catch (err) {
+-    // eslint-disable-next-line no-console
+-    console.error("persistFullReply failed:", err);
+-  }
+-}
+-
+-/** Parses Groq's `data: {...}` SSE chunks and concatenates the delta text. */
+-async function readGroqSseText(stream: ReadableStream<Uint8Array>): Promise<string> {
+-  const reader = stream.getReader();
+-  const decoder = new TextDecoder();
+-  let buffer = "";
+-  let full = "";
+-
+-  for (;;) {
+-    const { done, value } = await reader.read();
+-    if (done) break;
+-    buffer += decoder.decode(value, { stream: true });
+-
+-    const lines = buffer.split("\n");
+-    buffer = lines.pop() ?? "";
+-
+-    for (const line of lines) {
+-      const trimmed = line.trim();
+-      if (!trimmed.startsWith("data:")) continue;
+-      const payload = trimmed.slice("data:".length).trim();
+-      if (payload === "[DONE]") continue;
+-      try {
+-        const json = JSON.parse(payload);
+-        const delta: string | undefined = json?.choices?.[0]?.delta?.content;
+-        if (delta) full += delta;
+-      } catch {
+-        // Ignore malformed SSE chunks rather than failing the whole read.
+-      }
+-    }
+-  }
+-
+-  return full;
+-}
+diff -ruN '--exclude=node_modules' '--exclude=.next' '--exclude=package-lock.json' '--exclude=tsconfig.tsbuildinfo' '--exclude=next-env.d.ts' '--exclude=.git' va-mentor-base/src/app/api/onboarding/complete/route.ts va-avatars/src/app/api/onboarding/complete/route.ts
+--- va-mentor-base/src/app/api/onboarding/complete/route.ts	2026-07-21 09:11:27.888938697 +0000
++++ va-avatars/src/app/api/onboarding/complete/route.ts	2026-07-23 02:13:26.255221649 +0000
+@@ -2,23 +2,12 @@
+ import { z } from "zod";
+ import { verifyAuthenticatedUser } from "@/lib/supabase/auth-guard";
+ import { createAdminClient } from "@/lib/supabase/admin";
++import { CAREER_LEVELS, COUNTRIES } from "@/lib/onboarding/constants";
+ import {
+   getRequiredLegalDocuments,
+   recordLegalAcceptances,
+ } from "@/lib/legal/acceptance";
+ 
+-const PROFESSIONS = [
+-  "Student",
+-  "Professional",
+-  "Manager",
+-  "Executive",
+-  "Founder",
+-  "Consultant",
+-  "Job Seeker",
+-] as const;
+-
+-const EXPERIENCE_LEVELS = ["Beginner", "Intermediate", "Advanced"] as const;
+-
+ const PRIMARY_GOALS = [
+   "Improve Confidence",
+   "Executive Presence",
+@@ -32,8 +21,12 @@
+ const bodySchema = z.object({
+   displayName: z.string().trim().min(1).max(80),
+   timezone: z.string().trim().min(1).max(64),
+-  profession: z.enum(PROFESSIONS).optional(),
+-  experienceLevel: z.enum(EXPERIENCE_LEVELS).optional(),
++  country: z.enum(COUNTRIES).optional(),
++  organizationName: z.string().trim().max(160).optional(),
++  industryId: z.string().uuid().optional(),
++  functionalAreaId: z.string().uuid().optional(),
++  currentRoleId: z.string().uuid().optional(),
++  careerLevel: z.enum(CAREER_LEVELS).optional(),
+   primaryGoal: z.enum(PRIMARY_GOALS).optional(),
+   // IDs of every legal_documents row the client is asserting the user
+   // agreed to. This is NOT trusted at face value — the server always
+@@ -46,19 +39,21 @@
+ /**
+  * Marks onboarding complete for the current session's user.
+  *
+- * CTO Review Foundation Hardening changes applied here:
++ * Product Redefinition — Onboarding Overhaul: profession/experience_level
++ * (Foundation Hardening Change #2) are superseded by industryId/
++ * functionalAreaId/currentRoleId/careerLevel/organizationName/country.
++ * industryId/functionalAreaId/currentRoleId are validated against the
++ * live `is_active = true` set server-side rather than trusted at face
++ * value — same "never trust a client-supplied id/reference at face
++ * value" principle already applied to acceptedDocumentIds below.
++ *
++ * CTO Review Foundation Hardening changes still in force here:
+  *   - Change #1 (Legal Acceptance System): writes one immutable
+  *     legal_acceptances row per required document instead of only
+- *     setting profiles.terms_accepted_at. The request is rejected if the
+- *     client didn't accept every currently-required document — the
+- *     server treats its own required-document list as authoritative,
+- *     never the client's.
+- *   - Change #2 (Profile Foundation Fields): persists profession,
+- *     experience_level, primary_goal.
++ *     setting profiles.terms_accepted_at.
+  *   - Change #6 (Admin Client Safety): auth is verified via the shared
+  *     verifyAuthenticatedUser() guard before the admin (service-role)
+- *     client is touched at all, rather than each route hand-rolling its
+- *     own getUser() check.
++ *     client is touched at all.
+  *
+  * `onboarding_completed_at` remains intentionally NOT client-updatable
+  * via RLS column grants (see migration 0006) — this route is the only
+@@ -98,6 +93,40 @@
+   }
+ 
+   const admin = createAdminClient();
++
++  // Validate the three professional-identity foreign keys against the
++  // live active set rather than trusting the client's submitted ids —
++  // a stale id (an industry deactivated after the client loaded the
++  // onboarding form) shouldn't silently write a dangling reference.
++  const [{ data: industries }, { data: functionalAreas }, { data: currentRoles }] = await Promise.all([
++    admin.from("industries").select("id").eq("is_active", true),
++    admin.from("functional_areas").select("id").eq("is_active", true),
++    admin.from("current_roles").select("id").eq("is_active", true),
++  ]);
++
++  const activeIndustryIds = new Set((industries ?? []).map((i) => i.id));
++  const activeFunctionalAreaIds = new Set((functionalAreas ?? []).map((f) => f.id));
++  const activeCurrentRoleIds = new Set((currentRoles ?? []).map((r) => r.id));
++
++  if (parsed.data.industryId && !activeIndustryIds.has(parsed.data.industryId)) {
++    return NextResponse.json(
++      { error: { code: "VALIDATION_ERROR", message: "Unknown or inactive industry" } },
++      { status: 400 },
++    );
++  }
++  if (parsed.data.functionalAreaId && !activeFunctionalAreaIds.has(parsed.data.functionalAreaId)) {
++    return NextResponse.json(
++      { error: { code: "VALIDATION_ERROR", message: "Unknown or inactive functional area" } },
++      { status: 400 },
++    );
++  }
++  if (parsed.data.currentRoleId && !activeCurrentRoleIds.has(parsed.data.currentRoleId)) {
++    return NextResponse.json(
++      { error: { code: "VALIDATION_ERROR", message: "Unknown or inactive current role" } },
++      { status: 400 },
++    );
++  }
++
+   const now = new Date().toISOString();
+ 
+   const { error } = await admin
+@@ -105,8 +134,12 @@
+     .update({
+       display_name: parsed.data.displayName,
+       timezone: parsed.data.timezone,
+-      profession: parsed.data.profession ?? null,
+-      experience_level: parsed.data.experienceLevel ?? null,
++      country: parsed.data.country ?? null,
++      organization_name: parsed.data.organizationName ?? null,
++      industry_id: parsed.data.industryId ?? null,
++      functional_area_id: parsed.data.functionalAreaId ?? null,
++      current_role_id: parsed.data.currentRoleId ?? null,
++      career_level: parsed.data.careerLevel ?? null,
+       primary_goal: parsed.data.primaryGoal ?? null,
+       onboarding_completed_at: now,
+       // Cheap "has this user accepted anything, ever" flag for simple UI
+diff -ruN '--exclude=node_modules' '--exclude=.next' '--exclude=package-lock.json' '--exclude=tsconfig.tsbuildinfo' '--exclude=next-env.d.ts' '--exclude=.git' va-mentor-base/src/app/page.tsx va-avatars/src/app/page.tsx
+--- va-mentor-base/src/app/page.tsx	2026-07-21 09:11:27.894020406 +0000
++++ va-avatars/src/app/page.tsx	2026-07-23 02:15:44.233712552 +0000
+@@ -1,13 +1,13 @@
+ import Link from "next/link";
+ import { Button } from "@/components/ui/button";
+ import { WaveformBars } from "@/components/waveform/waveform-bars";
+-import { AvatarAva, AvatarJordan, AvatarMorgan, AvatarNova, AvatarPriya, AvatarRiley } from "@/components/avatar/coach-avatars";
++import { AvatarAva, AvatarElias, AvatarMorgan, AvatarNova, AvatarPriya, AvatarRiley } from "@/components/avatar/coach-avatars";
+ 
+ const MENTORS = [
+   { Avatar: AvatarMorgan, name: "Morgan", style: "Direct & challenging" },
+   { Avatar: AvatarAva, name: "Ava", style: "Calm & structured" },
+   { Avatar: AvatarPriya, name: "Priya", style: "Balanced & analytical" },
+-  { Avatar: AvatarJordan, name: "Jordan", style: "Practice-first" },
++  { Avatar: AvatarElias, name: "Elias", style: "Practice-first" },
+   { Avatar: AvatarRiley, name: "Riley", style: "Adaptable companion" },
+   { Avatar: AvatarNova, name: "Nova", style: "Encouraging & playful" },
+ ];
+diff -ruN '--exclude=node_modules' '--exclude=.next' '--exclude=package-lock.json' '--exclude=tsconfig.tsbuildinfo' '--exclude=next-env.d.ts' '--exclude=.git' va-mentor-base/src/components/avatar/coach-avatars.tsx va-avatars/src/components/avatar/coach-avatars.tsx
+--- va-mentor-base/src/components/avatar/coach-avatars.tsx	2026-07-21 09:11:27.895630222 +0000
++++ va-avatars/src/components/avatar/coach-avatars.tsx	2026-07-23 02:16:45.890211090 +0000
+@@ -1,19 +1,43 @@
++import Image from "next/image";
+ import type { SVGProps } from "react";
+ 
+-/**
+- * Six original, hand-illustrated coach avatars (flat-geometric style,
+- * not photoreal — deliberately, to feel approachable like a mascot
+- * rather than uncanny). Each is a self-contained animated SVG: gentle
+- * idle bob (animate-avatar-bob) + periodic blink (animate-blink on the
+- * eye group, scaleY-based so it reads as a blink rather than a wink).
+- *
+- * These are placeholders in the sense that richer, AI-illustrated art
+- * can replace them without any code change — see
+- * docs/AVATAR-ASSET-SPEC.md for the exact prompts/specs to hand to an
+- * image generator, plus the file format this system expects if you
+- * swap in real artwork later.
+- */
++function PhotoAvatar({
++  src,
++  alt,
++  className = "",
++}: {
++  src: string;
++  alt: string;
++  className?: string;
++}) {
++  return (
++    <Image
++      src={src}
++      alt={alt}
++      width={128}
++      height={128}
++      className={`animate-avatar-bob rounded-full object-cover object-top ${className}`}
++    />
++  );
++}
++
++export function AvatarMorgan({ className }: { className?: string }) {
++  return <PhotoAvatar src="/avatars/morgan.png" alt="Morgan" className={className} />;
++}
++
++export function AvatarAva({ className }: { className?: string }) {
++  return <PhotoAvatar src="/avatars/ava.png" alt="Ava" className={className} />;
++}
++
++export function AvatarPriya({ className }: { className?: string }) {
++  return <PhotoAvatar src="/avatars/priya.png" alt="Priya" className={className} />;
++}
++
++export function AvatarElias({ className }: { className?: string }) {
++  return <PhotoAvatar src="/avatars/elias.png" alt="Elias" className={className} />;
++}
+ 
++/** Module companions (no photo provided) — kept as illustrated SVGs. */
+ type AvatarProps = SVGProps<SVGSVGElement>;
+ 
+ function BaseAvatar({
+@@ -25,84 +49,20 @@
+ }: AvatarProps & { skin: string; outfit: string; hair: React.ReactNode }) {
+   return (
+     <svg viewBox="0 0 120 120" className="animate-avatar-bob" {...props}>
+-      {/* Outfit / shoulders */}
+       <path d="M20 118 C20 92 40 82 60 82 C80 82 100 92 100 118 Z" fill={outfit} />
+-      {/* Neck */}
+       <rect x="50" y="68" width="20" height="16" fill={skin} />
+-      {/* Head */}
+       <circle cx="60" cy="48" r="30" fill={skin} />
+       {hair}
+-      {/* Eyes (blink group) */}
+       <g className="origin-center animate-blink" style={{ transformBox: "fill-box" }}>
+         <circle cx="49" cy="48" r="3.2" fill="#12151B" />
+         <circle cx="71" cy="48" r="3.2" fill="#12151B" />
+       </g>
+-      {/* Smile */}
+       <path d="M48 60 Q60 68 72 60" stroke="#12151B" strokeWidth="2.5" fill="none" strokeLinecap="round" />
+       {children}
+     </svg>
+   );
+ }
+ 
+-/** Morgan — "the-coach": direct, high-energy. Short hair, coral outfit. */
+-export function AvatarMorgan(props: AvatarProps) {
+-  return (
+-    <BaseAvatar
+-      skin="#C68A5E"
+-      outfit="#FF6A45"
+-      hair={<path d="M30 40 C30 14 90 14 90 40 C90 28 30 28 30 40 Z" fill="#2B1B12" />}
+-      {...props}
+-    />
+-  );
+-}
+-
+-/** Ava — "the-guide": calm, structured. Ponytail, teal outfit. */
+-export function AvatarAva(props: AvatarProps) {
+-  return (
+-    <BaseAvatar
+-      skin="#F2C9A0"
+-      outfit="#0B6E6B"
+-      hair={
+-        <>
+-          <path d="M30 42 C28 12 92 12 90 42 C88 30 32 30 30 42 Z" fill="#4A2E1D" />
+-          <path d="M88 40 C100 46 100 74 90 78 C96 62 92 46 88 40 Z" fill="#4A2E1D" />
+-        </>
+-      }
+-      {...props}
+-    />
+-  );
+-}
+-
+-/** Priya — "the-strategist": balanced, analytical. Side-part bob, gold outfit. */
+-export function AvatarPriya(props: AvatarProps) {
+-  return (
+-    <BaseAvatar
+-      skin="#8A5A3B"
+-      outfit="#E7A93D"
+-      hair={
+-        <path
+-          d="M28 44 C26 10 70 8 92 26 C98 32 92 44 92 44 C92 30 40 22 32 34 C30 38 29 41 28 44 Z"
+-          fill="#15100C"
+-        />
+-      }
+-      {...props}
+-    />
+-  );
+-}
+-
+-/** Jordan — "the-sparring-partner": practice-first, direct. Textured crop, deep-ink outfit. */
+-export function AvatarJordan(props: AvatarProps) {
+-  return (
+-    <BaseAvatar
+-      skin="#E8B08A"
+-      outfit="#1B1F27"
+-      hair={<path d="M31 38 C31 16 89 16 89 38 C80 30 40 30 31 38 Z" fill="#171717" />}
+-      {...props}
+-    />
+-  );
+-}
+-
+-/** Riley — module companion (neutral), used outside of mentor chat. */
+ export function AvatarRiley(props: AvatarProps) {
+   return (
+     <BaseAvatar
+@@ -114,7 +74,6 @@
+   );
+ }
+ 
+-/** Nova — module companion (neutral, playful), used outside of mentor chat. */
+ export function AvatarNova(props: AvatarProps) {
+   return (
+     <BaseAvatar
+diff -ruN '--exclude=node_modules' '--exclude=.next' '--exclude=package-lock.json' '--exclude=tsconfig.tsbuildinfo' '--exclude=next-env.d.ts' '--exclude=.git' va-mentor-base/src/hooks/use-live-conversation.ts va-avatars/src/hooks/use-live-conversation.ts
+--- va-mentor-base/src/hooks/use-live-conversation.ts	1970-01-01 00:00:00.000000000 +0000
++++ va-avatars/src/hooks/use-live-conversation.ts	2026-07-23 02:13:26.651855360 +0000
+@@ -0,0 +1,99 @@
++"use client";
++
++import { useCallback, useRef, useState } from "react";
++import { useVoiceActivityDetection } from "@/hooks/use-voice-activity-detection";
++
++export type LiveConversationState = "idle" | "listening" | "user-speaking" | "processing";
++
++/**
++ * Stage 6 — hands-free conversation mode. Keeps one continuous mic
++ * stream open (rather than push-to-talk's record-per-press), uses VAD
++ * to detect when the user starts and stops talking, and hands each
++ * detected utterance to `onUtterance` as a Blob — the caller (
++ * mentor-chat.tsx) sends it to /api/voice/stt exactly like the
++ * push-to-talk flow already does, so the two modes share the same
++ * downstream pipeline.
++ *
++ * `onSpeechStart` fires the instant VAD detects the user talking,
++ * independent of whether an utterance is still being recorded — this
++ * is the barge-in signal: the caller uses it to abort an in-flight
++ * mentor reply and stop TTS playback immediately, before the new
++ * utterance has even finished being spoken.
++ */
++export function useLiveConversation(params: {
++  onUtterance: (audio: Blob) => void;
++  onSpeechStart: () => void;
++}) {
++  const [state, setState] = useState<LiveConversationState>("idle");
++  const [error, setError] = useState<string | null>(null);
++  const streamRef = useRef<MediaStream | null>(null);
++  const recorderRef = useRef<MediaRecorder | null>(null);
++  const chunksRef = useRef<Blob[]>([]);
++  const vad = useVoiceActivityDetection();
++
++  const startRecordingSegment = useCallback(() => {
++    const stream = streamRef.current;
++    if (!stream) return;
++    chunksRef.current = [];
++    const recorder = new MediaRecorder(stream, { mimeType: "audio/webm" });
++    recorder.ondataavailable = (e) => {
++      if (e.data.size > 0) chunksRef.current.push(e.data);
++    };
++    recorder.start();
++    recorderRef.current = recorder;
++  }, []);
++
++  const finishRecordingSegment = useCallback(() => {
++    const recorder = recorderRef.current;
++    if (!recorder || recorder.state === "inactive") return;
++
++    recorder.onstop = () => {
++      if (chunksRef.current.length > 0) {
++        params.onUtterance(new Blob(chunksRef.current, { type: "audio/webm" }));
++      }
++    };
++    recorder.stop();
++    recorderRef.current = null;
++  }, [params]);
++
++  const start = useCallback(async () => {
++    setError(null);
++    try {
++      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
++      streamRef.current = stream;
++      setState("listening");
++
++      vad.start(stream, {
++        onSpeechStart: () => {
++          setState("user-speaking");
++          params.onSpeechStart();
++          startRecordingSegment();
++        },
++        onUtteranceEnd: () => {
++          setState("processing");
++          finishRecordingSegment();
++        },
++      });
++    } catch {
++      setError("Microphone access was denied or is unavailable.");
++      setState("idle");
++    }
++  }, [vad, params, startRecordingSegment, finishRecordingSegment]);
++
++  const stop = useCallback(() => {
++    vad.stop();
++    if (recorderRef.current && recorderRef.current.state !== "inactive") {
++      recorderRef.current.stop();
++    }
++    streamRef.current?.getTracks().forEach((track) => track.stop());
++    streamRef.current = null;
++    setState("idle");
++  }, [vad]);
++
++  /** Call once the mentor's reply has finished so state returns to 'listening'. */
++  const resumeListening = useCallback(() => {
++    if (streamRef.current) setState("listening");
++  }, []);
++
++  return { state, error, start, stop, resumeListening };
++}
+diff -ruN '--exclude=node_modules' '--exclude=.next' '--exclude=package-lock.json' '--exclude=tsconfig.tsbuildinfo' '--exclude=next-env.d.ts' '--exclude=.git' va-mentor-base/src/hooks/use-voice-activity-detection.ts va-avatars/src/hooks/use-voice-activity-detection.ts
+--- va-mentor-base/src/hooks/use-voice-activity-detection.ts	1970-01-01 00:00:00.000000000 +0000
++++ va-avatars/src/hooks/use-voice-activity-detection.ts	2026-07-23 02:13:26.652989754 +0000
+@@ -0,0 +1,79 @@
++"use client";
++
++import { useCallback, useRef } from "react";
++import { computeRms, nextVadState, DEFAULT_VAD_CONFIG, type VadState, type VadConfig } from "@/lib/voice/vad";
++
++/**
++ * Stage 6 — samples mic audio energy every animation frame via an
++ * AnalyserNode and runs it through the pure VAD decision logic
++ * (src/lib/voice/vad.ts). Exposes imperative callbacks rather than
++ * React state, since this needs to react within a single frame
++ * (~16ms) for barge-in to feel instant — routing every frame through
++ * a state update/re-render would add latency for no benefit, since
++ * nothing here needs to be rendered.
++ */
++export function useVoiceActivityDetection(config: VadConfig = DEFAULT_VAD_CONFIG) {
++  const audioContextRef = useRef<AudioContext | null>(null);
++  const analyserRef = useRef<AnalyserNode | null>(null);
++  const rafRef = useRef<number | null>(null);
++  const vadStateRef = useRef<VadState>({ isSpeaking: false, silenceDurationMs: 0 });
++  const lastFrameTimeRef = useRef<number>(0);
++
++  const start = useCallback(
++    (
++      stream: MediaStream,
++      callbacks: {
++        onSpeechStart?: () => void;
++        onUtteranceEnd?: () => void;
++      },
++    ) => {
++      const audioContext = new AudioContext();
++      const source = audioContext.createMediaStreamSource(stream);
++      const analyser = audioContext.createAnalyser();
++      analyser.fftSize = 512;
++      source.connect(analyser);
++
++      audioContextRef.current = audioContext;
++      analyserRef.current = analyser;
++      vadStateRef.current = { isSpeaking: false, silenceDurationMs: 0 };
++      lastFrameTimeRef.current = performance.now();
++
++      const buffer = new Float32Array(analyser.fftSize);
++      let wasSpeaking = false;
++
++      const tick = () => {
++        analyser.getFloatTimeDomainData(buffer);
++        const rms = computeRms(buffer);
++        const now = performance.now();
++        const deltaMs = now - lastFrameTimeRef.current;
++        lastFrameTimeRef.current = now;
++
++        const { state, utteranceEnded } = nextVadState(vadStateRef.current, rms, deltaMs, config);
++        vadStateRef.current = state;
++
++        if (state.isSpeaking && !wasSpeaking) {
++          callbacks.onSpeechStart?.();
++        }
++        wasSpeaking = state.isSpeaking;
++
++        if (utteranceEnded) {
++          callbacks.onUtteranceEnd?.();
++        }
++
++        rafRef.current = requestAnimationFrame(tick);
++      };
++      rafRef.current = requestAnimationFrame(tick);
++    },
++    [config],
++  );
++
++  const stop = useCallback(() => {
++    if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
++    analyserRef.current?.disconnect();
++    void audioContextRef.current?.close();
++    audioContextRef.current = null;
++    analyserRef.current = null;
++  }, []);
++
++  return { start, stop };
++}
+diff -ruN '--exclude=node_modules' '--exclude=.next' '--exclude=package-lock.json' '--exclude=tsconfig.tsbuildinfo' '--exclude=next-env.d.ts' '--exclude=.git' va-mentor-base/src/lib/avatar/registry.ts va-avatars/src/lib/avatar/registry.ts
+--- va-mentor-base/src/lib/avatar/registry.ts	2026-07-21 09:11:27.916022957 +0000
++++ va-avatars/src/lib/avatar/registry.ts	2026-07-23 02:15:36.126062130 +0000
+@@ -1,21 +1,21 @@
+ import {
+   AvatarAva,
+-  AvatarJordan,
++  AvatarElias,
+   AvatarMorgan,
+   AvatarNova,
+   AvatarPriya,
+   AvatarRiley,
+ } from "@/components/avatar/coach-avatars";
+-import type { ComponentType, SVGProps } from "react";
++import type { ComponentType } from "react";
+ 
+-export type AvatarComponent = ComponentType<SVGProps<SVGSVGElement>>;
++export type AvatarComponent = ComponentType<{ className?: string }>;
+ 
+ /** Ties each seeded mentor (migration 0011) to its illustrated avatar. */
+ export const MENTOR_AVATARS: Record<string, AvatarComponent> = {
+   "the-coach": AvatarMorgan,
+   "the-guide": AvatarAva,
+   "the-strategist": AvatarPriya,
+-  "the-sparring-partner": AvatarJordan,
++  "the-sparring-partner": AvatarElias,
+ };
+ 
+ /**
+diff -ruN '--exclude=node_modules' '--exclude=.next' '--exclude=package-lock.json' '--exclude=tsconfig.tsbuildinfo' '--exclude=next-env.d.ts' '--exclude=.git' va-mentor-base/src/lib/chat/persist-reply.ts va-avatars/src/lib/chat/persist-reply.ts
+--- va-mentor-base/src/lib/chat/persist-reply.ts	1970-01-01 00:00:00.000000000 +0000
++++ va-avatars/src/lib/chat/persist-reply.ts	2026-07-23 02:13:27.110223051 +0000
+@@ -0,0 +1,104 @@
++import { createAdminClient } from "@/lib/supabase/admin";
++import { extractMemoriesFromMessages } from "@/lib/memory/extraction";
++import { consolidateMemoriesIfNeeded } from "@/lib/memory/consolidation";
++import { recordActivitySnapshot } from "@/lib/progress/activity";
++
++const MEMORY_EXTRACTION_TRIGGER_EVERY_N_MESSAGES = 6;
++
++/**
++ * Buffers the Groq SSE stream to reconstruct the full assistant reply,
++ * persists it, then (every N messages) triggers memory extraction.
++ * Runs after the response has already been returned to the client —
++ * failures here are logged, never surfaced to the user, per
++ * extractMemoriesFromMessages's documented contract.
++ *
++ * `recordActivity` defaults to true; /api/chat/greet passes false for
++ * its proactive-opening message, since that message isn't user
++ * activity to count toward the day streak — the user hasn't done
++ * anything yet, the mentor just spoke first.
++ */
++export async function persistMentorReply(params: {
++  admin: ReturnType<typeof createAdminClient>;
++  sessionId: string;
++  userId: string;
++  utilityModel: string;
++  stream: ReadableStream<Uint8Array>;
++  recordActivity?: boolean;
++}) {
++  try {
++    const text = await readGroqSseText(params.stream);
++    if (!text) return;
++
++    await params.admin.from("messages").insert({
++      session_id: params.sessionId,
++      user_id: params.userId,
++      role: "mentor",
++      content: text,
++    });
++
++    if (params.recordActivity !== false) {
++      await recordActivitySnapshot(params.userId);
++    }
++
++    const { count } = await params.admin
++      .from("messages")
++      .select("id", { count: "exact", head: true })
++      .eq("session_id", params.sessionId);
++
++    if (count && count % MEMORY_EXTRACTION_TRIGGER_EVERY_N_MESSAGES === 0) {
++      const { data: recent } = await params.admin
++        .from("messages")
++        .select("role, content")
++        .eq("session_id", params.sessionId)
++        .order("created_at", { ascending: false })
++        .limit(MEMORY_EXTRACTION_TRIGGER_EVERY_N_MESSAGES);
++
++      await extractMemoriesFromMessages({
++        userId: params.userId,
++        utilityModel: params.utilityModel,
++        recentMessages: (recent ?? []).slice().reverse(),
++      });
++
++      await consolidateMemoriesIfNeeded({
++        userId: params.userId,
++        utilityModel: params.utilityModel,
++      });
++    }
++  } catch (err) {
++    // eslint-disable-next-line no-console
++    console.error("persistMentorReply failed:", err);
++  }
++}
++
++/** Parses Groq's `data: {...}` SSE chunks and concatenates the delta text. */
++export async function readGroqSseText(stream: ReadableStream<Uint8Array>): Promise<string> {
++  const reader = stream.getReader();
++  const decoder = new TextDecoder();
++  let buffer = "";
++  let full = "";
++
++  for (;;) {
++    const { done, value } = await reader.read();
++    if (done) break;
++    buffer += decoder.decode(value, { stream: true });
++
++    const lines = buffer.split("\n");
++    buffer = lines.pop() ?? "";
++
++    for (const line of lines) {
++      const trimmed = line.trim();
++      if (!trimmed.startsWith("data:")) continue;
++      const payload = trimmed.slice("data:".length).trim();
++      if (payload === "[DONE]") continue;
++      try {
++        const json = JSON.parse(payload);
++        const delta: string | undefined = json?.choices?.[0]?.delta?.content;
++        if (delta) full += delta;
++      } catch {
++        // Ignore malformed SSE chunks rather than failing the whole read.
++      }
++    }
++  }
++
++  return full;
++}
+diff -ruN '--exclude=node_modules' '--exclude=.next' '--exclude=package-lock.json' '--exclude=tsconfig.tsbuildinfo' '--exclude=next-env.d.ts' '--exclude=.git' va-mentor-base/src/lib/chat/prompt-context.ts va-avatars/src/lib/chat/prompt-context.ts
+--- va-mentor-base/src/lib/chat/prompt-context.ts	1970-01-01 00:00:00.000000000 +0000
++++ va-avatars/src/lib/chat/prompt-context.ts	2026-07-23 02:13:27.109441530 +0000
+@@ -0,0 +1,100 @@
++import type { SupabaseClient } from "@supabase/supabase-js";
++import { getRelevantMemories } from "@/lib/memory/retrieval";
++import { pickRelevantFramework } from "@/lib/coaching/frameworks";
++import { buildSystemPrompt, type ProgressSummary } from "@/lib/groq/prompts";
++import type { Database, Mentor } from "@/types/database";
++
++/**
++ * Shared between /api/chat and /api/chat/greet (Product Redefinition —
++ * proactive opening) so the two entry points can never silently drift
++ * in what context the mentor actually sees. Loads everything
++ * buildSystemPrompt needs and returns the assembled system prompt
++ * string directly.
++ */
++export async function loadSystemPrompt(
++  admin: SupabaseClient<Database>,
++  userId: string,
++  mentor: Mentor,
++): Promise<string> {
++  const [{ data: profile }, { data: preferences }, { data: goals }, { data: frameworks }, memories] =
++    await Promise.all([
++      admin
++        .from("profiles")
++        .select(
++          "display_name, primary_goal, career_level, organization_name, industries(name), functional_areas(name), current_roles(name)",
++        )
++        .eq("id", userId)
++        .single(),
++      admin.from("user_preferences").select("coaching_intensity, mentor_style").eq("user_id", userId).single(),
++      admin.from("goals").select("title, status").eq("user_id", userId).eq("status", "active"),
++      admin.from("coaching_frameworks").select("*").eq("is_active", true),
++      getRelevantMemories(admin, userId),
++    ]);
++
++  if (!profile || !preferences) {
++    throw new Error("failed to load profile/preferences for prompt assembly");
++  }
++
++  const framework = pickRelevantFramework(frameworks ?? [], profile.primary_goal);
++
++  // Supabase's relational embed typing isn't fully resolved for this
++  // hand-authored Database type; narrowed here rather than fighting it.
++  const profileWithRelations = profile as any;
++
++  return buildSystemPrompt({
++    mentor,
++    profile: {
++      display_name: profile.display_name,
++      primary_goal: profile.primary_goal,
++      career_level: profile.career_level,
++    },
++    professional: {
++      organizationName: profile.organization_name,
++      industryName: profileWithRelations.industries?.name ?? null,
++      functionalAreaName: profileWithRelations.functional_areas?.name ?? null,
++      currentRoleName: profileWithRelations.current_roles?.name ?? null,
++    },
++    preferences,
++    memories,
++    goals: goals ?? [],
++    framework,
++  });
++}
++
++/**
++ * Fetches the concrete "progress" signals the opening-turn directive
++ * (buildOpeningTurnDirective) can reference — day streak and the most
++ * recent episodic_summary memory item, if either exists. Deliberately
++ * light-touch: this is not the full "yesterday's exercise" curriculum
++ * concept from the brief (that's a distinct future stage), just what's
++ * genuinely available today (progress_snapshots + memory_items).
++ */
++export async function loadProgressSummary(
++  admin: SupabaseClient<Database>,
++  userId: string,
++): Promise<ProgressSummary> {
++  const [{ data: streakSnapshot }, { data: recentSummary }] = await Promise.all([
++    admin
++      .from("progress_snapshots")
++      .select("metric_value")
++      .eq("user_id", userId)
++      .eq("metric_key", "day_streak")
++      .order("recorded_at", { ascending: false })
++      .limit(1)
++      .maybeSingle(),
++    admin
++      .from("memory_items")
++      .select("content")
++      .eq("user_id", userId)
++      .eq("type", "episodic_summary")
++      .is("superseded_by", null)
++      .order("created_at", { ascending: false })
++      .limit(1)
++      .maybeSingle(),
++  ]);
++
++  return {
++    dayStreak: streakSnapshot?.metric_value ?? null,
++    lastSessionNote: recentSummary?.content ?? null,
++  };
++}
+diff -ruN '--exclude=node_modules' '--exclude=.next' '--exclude=package-lock.json' '--exclude=tsconfig.tsbuildinfo' '--exclude=next-env.d.ts' '--exclude=.git' va-mentor-base/src/lib/groq/client.ts va-avatars/src/lib/groq/client.ts
+--- va-mentor-base/src/lib/groq/client.ts	2026-07-21 09:11:27.916022957 +0000
++++ va-avatars/src/lib/groq/client.ts	2026-07-23 02:13:26.657865116 +0000
+@@ -41,6 +41,7 @@
+   model: string;
+   messages: GroqMessage[];
+   temperature?: number;
++  signal?: AbortSignal;
+ }): Promise<Response> {
+   const response = await fetch(`${GROQ_API_BASE}/chat/completions`, {
+     method: "POST",
+@@ -54,6 +55,7 @@
+       temperature: params.temperature ?? 0.7,
+       stream: true,
+     }),
++    signal: params.signal,
+   });
+ 
+   if (!response.ok || !response.body) {
+diff -ruN '--exclude=node_modules' '--exclude=.next' '--exclude=package-lock.json' '--exclude=tsconfig.tsbuildinfo' '--exclude=next-env.d.ts' '--exclude=.git' va-mentor-base/src/lib/groq/prompts.ts va-avatars/src/lib/groq/prompts.ts
+--- va-mentor-base/src/lib/groq/prompts.ts	2026-07-21 09:11:27.917329245 +0000
++++ va-avatars/src/lib/groq/prompts.ts	2026-07-23 02:13:27.092279725 +0000
+@@ -1,8 +1,21 @@
+ import type { CoachingFramework, Goal, MemoryItem, Mentor, Profile, UserPreferences } from "@/types/database";
+ 
++export interface ProfessionalContext {
++  organizationName: string | null;
++  industryName: string | null;
++  functionalAreaName: string | null;
++  currentRoleName: string | null;
++}
++
++export interface ProgressSummary {
++  dayStreak: number | null;
++  lastSessionNote: string | null;
++}
++
+ export interface PromptContext {
+   mentor: Mentor;
+-  profile: Pick<Profile, "display_name" | "primary_goal" | "experience_level">;
++  profile: Pick<Profile, "display_name" | "primary_goal" | "career_level">;
++  professional: ProfessionalContext;
+   preferences: Pick<UserPreferences, "coaching_intensity" | "mentor_style">;
+   memories: Pick<MemoryItem, "type" | "content">[];
+   goals: Pick<Goal, "title" | "status">[];
+@@ -10,20 +23,58 @@
+ }
+ 
+ /**
++ * Product Redefinition — Mentor Redefinition. Applies to every turn,
++ * not just the opening: the brief is explicit that VA is not a
++ * general-purpose chatbot and the mentor must never default to
++ * generic, passive framing ("What can I help you with today?"). This
++ * section is what enforces that platform-wide, independent of which
++ * mentor persona is active or what that persona's specific style is.
++ */
++const COACHING_PHILOSOPHY = [
++  "You are an Executive Communication Coach, not a general-purpose assistant.",
++  "Never open with, or fall back on, generic passive framing like",
++  '"What can I help you with today?" — you set the agenda, you challenge',
++  "assumptions, and you ask probing questions rather than waiting to be asked.",
++  "Teach and enforce recommendation-first communication — the user should",
++  'lead with their recommendation, not bury it ("Think First. Speak Second.").',
++  "When the user rambles, hedges, or delays their point, name it directly",
++  "rather than letting it pass. Your objective is this person's advancement",
++  "toward senior leadership, not just a pleasant conversation.",
++].join(" ");
++
++/**
+  * Pure function — no I/O — so it's directly unit-testable
+  * (tests/unit/groq-prompt-assembly.test.ts) without mocking Supabase or
+  * Groq. Assembles the full system prompt sent as the first message in
+  * every /api/chat call. Deliberately does NOT echo raw memory items
+  * verbatim in a way the model is asked to "repeat" — see the Phase 1
+  * blueprint's prompt-injection threat-model entry (Section 14.6).
++ *
++ * `professional` carries already-resolved names (not FK ids) —
++ * industry_id/functional_area_id/current_role_id on profiles are
++ * foreign keys, so the caller (route.ts) resolves them to display
++ * names before calling this function, keeping this function pure and
++ * free of any Supabase dependency.
+  */
+ export function buildSystemPrompt(ctx: PromptContext): string {
+-  const sections: string[] = [ctx.mentor.persona_prompt];
++  const sections: string[] = [ctx.mentor.persona_prompt, COACHING_PHILOSOPHY];
++
++  const roleContext = [
++    ctx.professional.currentRoleName ? `working as a ${ctx.professional.currentRoleName}` : null,
++    ctx.professional.functionalAreaName ? `in ${ctx.professional.functionalAreaName}` : null,
++    ctx.professional.industryName ? `within the ${ctx.professional.industryName} industry` : null,
++    ctx.professional.organizationName ? `at ${ctx.professional.organizationName}` : null,
++  ]
++    .filter(Boolean)
++    .join(" ");
+ 
+   sections.push(
+-    `The user's name is ${ctx.profile.display_name ?? "not provided"}. ` +
+-      `Their stated primary goal is "${ctx.profile.primary_goal ?? "not specified"}" ` +
+-      `at a self-reported experience level of "${ctx.profile.experience_level ?? "not specified"}".`,
++    `The user's name is ${ctx.profile.display_name ?? "not provided"}` +
++      (roleContext ? `, ${roleContext}` : "") +
++      `. Their self-reported career level is "${ctx.profile.career_level ?? "not specified"}". ` +
++      `Their stated primary goal is "${ctx.profile.primary_goal ?? "not specified"}". ` +
++      `Calibrate examples, scenarios, and vocabulary to this professional context — a Board-level ` +
++      `executive and a Graduate Trainee should not receive the same kind of practice scenario.`,
+   );
+ 
+   sections.push(
+@@ -52,3 +103,36 @@
+ 
+   return sections.join("\n\n");
+ }
++
++/**
++ * Product Redefinition — Mentor Redefinition, proactive opening.
++ *
++ * Builds the synthetic "kick off the session" directive sent as the
++ * user-role turn when a brand-new (zero-message) session starts —
++ * see /api/chat/greet/route.ts. This is never shown to the user and
++ * is not persisted as a real message; it exists purely to give the
++ * model something to respond to, since a chat completion needs at
++ * least one non-system message.
++ *
++ * Mirrors the brief's "Good Example" structure directly: state who
++ * they are and their objective, reference concrete recent progress if
++ * any exists, end with one specific, time-boxed challenge or question
++ * — never a generic "what would you like to work on".
++ */
++export function buildOpeningTurnDirective(progress: ProgressSummary): string {
++  const progressLine = progress.lastSessionNote
++    ? `Reference this concretely in your opening (in your own words, not verbatim): ${progress.lastSessionNote}`
++    : progress.dayStreak && progress.dayStreak > 1
++      ? `The user is on a ${progress.dayStreak}-day streak — you may acknowledge that briefly.`
++      : "This may be the user's first session — do not fabricate prior progress that doesn't exist.";
++
++  return [
++    "[SESSION START — this is an internal directive, not a message from the user.",
++    "Begin the session now, proactively, following your identity and the coaching",
++    "philosophy above. Do not wait to be asked what to work on. Open by naming who",
++    "they are and their objective, in your own words. " + progressLine,
++    "Close your opening with exactly one specific, concrete, time-boxed challenge",
++    'or question for them to respond to right now — never a generic "what would',
++    'you like to talk about" or "how can I help you today."]',
++  ].join(" ");
++}
+diff -ruN '--exclude=node_modules' '--exclude=.next' '--exclude=package-lock.json' '--exclude=tsconfig.tsbuildinfo' '--exclude=next-env.d.ts' '--exclude=.git' va-mentor-base/src/lib/mentor/assignment.ts va-avatars/src/lib/mentor/assignment.ts
+--- va-mentor-base/src/lib/mentor/assignment.ts	2026-07-21 09:11:27.918078843 +0000
++++ va-avatars/src/lib/mentor/assignment.ts	2026-07-23 02:13:27.099994321 +0000
+@@ -50,7 +50,7 @@
+   ] = await Promise.all([
+     admin
+       .from("profiles")
+-      .select("profession, experience_level, primary_goal")
++      .select("career_level, primary_goal")
+       .eq("id", userId)
+       .single(),
+     admin
+@@ -74,8 +74,7 @@
+   }
+ 
+   const match = pickBestMentor(mentors, {
+-    profession: profile.profession,
+-    experienceLevel: profile.experience_level,
++    careerLevel: profile.career_level,
+     primaryGoal: profile.primary_goal,
+     mentorStyle: preferences.mentor_style,
+     coachingIntensity: preferences.coaching_intensity,
+diff -ruN '--exclude=node_modules' '--exclude=.next' '--exclude=package-lock.json' '--exclude=tsconfig.tsbuildinfo' '--exclude=next-env.d.ts' '--exclude=.git' va-mentor-base/src/lib/mentor/matching.ts va-avatars/src/lib/mentor/matching.ts
+--- va-mentor-base/src/lib/mentor/matching.ts	2026-07-21 09:11:27.918518626 +0000
++++ va-avatars/src/lib/mentor/matching.ts	2026-07-23 02:13:27.100279725 +0000
+@@ -1,8 +1,7 @@
+ import type { Mentor, Profile, UserPreferences } from "@/types/database";
+ 
+ export interface MatchInput {
+-  profession: Profile["profession"];
+-  experienceLevel: Profile["experience_level"];
++  careerLevel: Profile["career_level"];
+   primaryGoal: Profile["primary_goal"];
+   mentorStyle: UserPreferences["mentor_style"];
+   coachingIntensity: UserPreferences["coaching_intensity"];
+diff -ruN '--exclude=node_modules' '--exclude=.next' '--exclude=package-lock.json' '--exclude=tsconfig.tsbuildinfo' '--exclude=next-env.d.ts' '--exclude=.git' va-mentor-base/src/lib/onboarding/constants.ts va-avatars/src/lib/onboarding/constants.ts
+--- va-mentor-base/src/lib/onboarding/constants.ts	1970-01-01 00:00:00.000000000 +0000
++++ va-avatars/src/lib/onboarding/constants.ts	2026-07-23 02:13:27.108150526 +0000
+@@ -0,0 +1,58 @@
++/**
++ * Product Redefinition — Onboarding Overhaul.
++ *
++ * CAREER_LEVELS mirrors the CHECK constraint on profiles.career_level
++ * (migration 0024) — kept here as the single place both the onboarding
++ * form and the API route's validation schema import from, so the two
++ * can never silently drift apart.
++ *
++ * COUNTRIES is validated at the application layer rather than a DB
++ * reference table (see migration 0024's comment) — a standard,
++ * effectively-static list doesn't need the "extensible, centrally
++ * maintained" treatment the brief specifically asked for on industries.
++ */
++
++export const CAREER_LEVELS = [
++  "Entry Level",
++  "Early Career",
++  "Mid Level",
++  "Senior Level",
++  "Executive Level",
++  "Board Level",
++] as const;
++
++export type CareerLevel = (typeof CAREER_LEVELS)[number];
++
++export const COUNTRIES = [
++  "Afghanistan", "Albania", "Algeria", "Andorra", "Angola", "Argentina", "Armenia",
++  "Australia", "Austria", "Azerbaijan", "Bahamas", "Bahrain", "Bangladesh", "Barbados",
++  "Belarus", "Belgium", "Belize", "Benin", "Bhutan", "Bolivia", "Bosnia and Herzegovina",
++  "Botswana", "Brazil", "Brunei", "Bulgaria", "Burkina Faso", "Burundi", "Cambodia",
++  "Cameroon", "Canada", "Cape Verde", "Central African Republic", "Chad", "Chile",
++  "China", "Colombia", "Comoros", "Congo", "Costa Rica", "Croatia", "Cuba", "Cyprus",
++  "Czechia", "Denmark", "Djibouti", "Dominica", "Dominican Republic", "Ecuador", "Egypt",
++  "El Salvador", "Equatorial Guinea", "Eritrea", "Estonia", "Eswatini", "Ethiopia",
++  "Fiji", "Finland", "France", "Gabon", "Gambia", "Georgia", "Germany", "Ghana",
++  "Greece", "Grenada", "Guatemala", "Guinea", "Guinea-Bissau", "Guyana", "Haiti",
++  "Honduras", "Hungary", "Iceland", "India", "Indonesia", "Iran", "Iraq", "Ireland",
++  "Israel", "Italy", "Ivory Coast", "Jamaica", "Japan", "Jordan", "Kazakhstan", "Kenya",
++  "Kiribati", "Kosovo", "Kuwait", "Kyrgyzstan", "Laos", "Latvia", "Lebanon", "Lesotho",
++  "Liberia", "Libya", "Liechtenstein", "Lithuania", "Luxembourg", "Madagascar", "Malawi",
++  "Malaysia", "Maldives", "Mali", "Malta", "Marshall Islands", "Mauritania", "Mauritius",
++  "Mexico", "Micronesia", "Moldova", "Monaco", "Mongolia", "Montenegro", "Morocco",
++  "Mozambique", "Myanmar", "Namibia", "Nauru", "Nepal", "Netherlands", "New Zealand",
++  "Nicaragua", "Niger", "Nigeria", "North Korea", "North Macedonia", "Norway", "Oman",
++  "Pakistan", "Palau", "Panama", "Papua New Guinea", "Paraguay", "Peru", "Philippines",
++  "Poland", "Portugal", "Qatar", "Romania", "Russia", "Rwanda", "Saint Lucia", "Samoa",
++  "San Marino", "Sao Tome and Principe", "Saudi Arabia", "Senegal", "Serbia",
++  "Seychelles", "Sierra Leone", "Singapore", "Slovakia", "Slovenia", "Solomon Islands",
++  "Somalia", "South Africa", "South Korea", "South Sudan", "Spain", "Sri Lanka",
++  "Sudan", "Suriname", "Sweden", "Switzerland", "Syria", "Taiwan", "Tajikistan",
++  "Tanzania", "Thailand", "Timor-Leste", "Togo", "Tonga", "Trinidad and Tobago",
++  "Tunisia", "Turkey", "Turkmenistan", "Tuvalu", "Uganda", "Ukraine",
++  "United Arab Emirates", "United Kingdom", "United States", "Uruguay", "Uzbekistan",
++  "Vanuatu", "Vatican City", "Venezuela", "Vietnam", "Yemen", "Zambia", "Zimbabwe",
++  "Other",
++] as const;
++
++export type Country = (typeof COUNTRIES)[number];
+diff -ruN '--exclude=node_modules' '--exclude=.next' '--exclude=package-lock.json' '--exclude=tsconfig.tsbuildinfo' '--exclude=next-env.d.ts' '--exclude=.git' va-mentor-base/src/lib/voice/sentence-chunker.ts va-avatars/src/lib/voice/sentence-chunker.ts
+--- va-mentor-base/src/lib/voice/sentence-chunker.ts	1970-01-01 00:00:00.000000000 +0000
++++ va-avatars/src/lib/voice/sentence-chunker.ts	2026-07-23 02:13:27.107514420 +0000
+@@ -0,0 +1,70 @@
++/**
++ * Stage 6 — sentence-level streaming TTS.
++ *
++ * Pure function: given the full text received so far and how much of
++ * it has already been sent to TTS, returns any newly-completed
++ * sentences plus the updated "already sent" boundary. Called after
++ * every SSE delta in mentor-chat.tsx so the mentor can start speaking
++ * a sentence while the model is still generating the next one, instead
++ * of waiting for the entire reply — this is the main lever for making
++ * push-to-talk-based voice feel closer to real-time duplex without a
++ * genuine streaming-audio protocol underneath.
++ *
++ * Deliberately conservative: only splits on '.', '!', '?' followed by
++ * whitespace or end-of-string, and requires at least a few characters
++ * before the punctuation (so "Dr." or "3.5" mid-sentence don't
++ * trigger a false split as often — not perfect, sentence boundary
++ * detection never fully is, but good enough that TTS chunks read as
++ * complete thoughts almost always).
++ */
++export interface SentenceChunkerState {
++  sentSentences: string[];
++  pendingBuffer: string;
++}
++
++export const initialChunkerState: SentenceChunkerState = { sentSentences: [], pendingBuffer: "" };
++
++const SENTENCE_BOUNDARY = /([.!?])(\s+|$)/;
++const MIN_SENTENCE_LENGTH = 12;
++
++export function extractCompletedSentences(
++  fullTextSoFar: string,
++  state: SentenceChunkerState,
++): { newSentences: string[]; nextState: SentenceChunkerState } {
++  const alreadyProcessedLength = state.sentSentences.join("").length + state.pendingBuffer.length;
++  const unseenText = fullTextSoFar.slice(alreadyProcessedLength);
++  let buffer = state.pendingBuffer + unseenText;
++
++  const newSentences: string[] = [];
++
++  for (;;) {
++    const match = buffer.match(SENTENCE_BOUNDARY);
++    if (!match || match.index === undefined) break;
++
++    const candidateEnd = match.index + match[1]!.length;
++    const candidate = buffer.slice(0, candidateEnd).trim();
++
++    if (candidate.length < MIN_SENTENCE_LENGTH) {
++      // Too short to confidently be a real sentence boundary (e.g. "Dr.")
++      // — keep accumulating rather than splitting here.
++      break;
++    }
++
++    newSentences.push(candidate);
++    buffer = buffer.slice(match.index + match[0].length);
++  }
++
++  return {
++    newSentences,
++    nextState: {
++      sentSentences: [...state.sentSentences, ...newSentences],
++      pendingBuffer: buffer,
++    },
++  };
++}
++
++/** Call once the stream is fully done to flush any trailing partial sentence. */
++export function flushRemainingBuffer(state: SentenceChunkerState): string | null {
++  const trimmed = state.pendingBuffer.trim();
++  return trimmed.length > 0 ? trimmed : null;
++}
+diff -ruN '--exclude=node_modules' '--exclude=.next' '--exclude=package-lock.json' '--exclude=tsconfig.tsbuildinfo' '--exclude=next-env.d.ts' '--exclude=.git' va-mentor-base/src/lib/voice/tts-playback-queue.ts va-avatars/src/lib/voice/tts-playback-queue.ts
+--- va-mentor-base/src/lib/voice/tts-playback-queue.ts	1970-01-01 00:00:00.000000000 +0000
++++ va-avatars/src/lib/voice/tts-playback-queue.ts	2026-07-23 02:13:27.106733527 +0000
+@@ -0,0 +1,88 @@
++"use client";
++
++/**
++ * Stage 6 — plays queued sentence audio sequentially through a single
++ * <audio> element, fetching TTS for each sentence as it's queued
++ * (rather than waiting for the whole reply). `stop()` is the barge-in
++ * primitive: called the instant VAD detects the user speaking again,
++ * it clears the queue and halts playback immediately rather than
++ * letting the current sentence finish.
++ */
++export class TtsPlaybackQueue {
++  private queue: string[] = [];
++  private isPlaying = false;
++  private stopped = false;
++  private audio: HTMLAudioElement;
++  private currentObjectUrl: string | null = null;
++  private inFlightController: AbortController | null = null;
++
++  constructor(audioElement: HTMLAudioElement) {
++    this.audio = audioElement;
++  }
++
++  enqueue(sentence: string) {
++    if (this.stopped) return;
++    this.queue.push(sentence);
++    if (!this.isPlaying) void this.playNext();
++  }
++
++  stop() {
++    this.stopped = true;
++    this.queue = [];
++    this.inFlightController?.abort();
++    this.audio.pause();
++    this.audio.currentTime = 0;
++    if (this.currentObjectUrl) {
++      URL.revokeObjectURL(this.currentObjectUrl);
++      this.currentObjectUrl = null;
++    }
++    this.isPlaying = false;
++  }
++
++  /** Call before reusing the queue for a new reply. */
++  reset() {
++    this.stopped = false;
++  }
++
++  private async playNext() {
++    const sentence = this.queue.shift();
++    if (!sentence || this.stopped) {
++      this.isPlaying = false;
++      return;
++    }
++    this.isPlaying = true;
++
++    try {
++      this.inFlightController = new AbortController();
++      const res = await fetch("/api/voice/tts", {
++        method: "POST",
++        headers: { "Content-Type": "application/json" },
++        body: JSON.stringify({ text: sentence }),
++        signal: this.inFlightController.signal,
++      });
++      if (!res.ok || this.stopped) {
++        this.isPlaying = false;
++        if (!this.stopped) void this.playNext();
++        return;
++      }
++
++      const blob = await res.blob();
++      if (this.stopped) return;
++
++      if (this.currentObjectUrl) URL.revokeObjectURL(this.currentObjectUrl);
++      this.currentObjectUrl = URL.createObjectURL(blob);
++      this.audio.src = this.currentObjectUrl;
++
++      await new Promise<void>((resolve) => {
++        this.audio.onended = () => resolve();
++        this.audio.onerror = () => resolve();
++        void this.audio.play().catch(() => resolve());
++      });
++    } catch {
++      // Aborted or network error — fall through to try the next sentence.
++    }
++
++    if (!this.stopped) void this.playNext();
++    else this.isPlaying = false;
++  }
++}
+diff -ruN '--exclude=node_modules' '--exclude=.next' '--exclude=package-lock.json' '--exclude=tsconfig.tsbuildinfo' '--exclude=next-env.d.ts' '--exclude=.git' va-mentor-base/src/lib/voice/vad.ts va-avatars/src/lib/voice/vad.ts
+--- va-mentor-base/src/lib/voice/vad.ts	1970-01-01 00:00:00.000000000 +0000
++++ va-avatars/src/lib/voice/vad.ts	2026-07-23 02:13:27.106143255 +0000
+@@ -0,0 +1,75 @@
++/**
++ * Stage 6 — Real-time duplex voice.
++ *
++ * Pure energy-threshold VAD decision logic. The actual audio energy
++ * sampling happens in useVoiceActivityDetection (Web Audio API
++ * AnalyserNode, browser-only) — this function is the decision rule it
++ * calls on every animation frame, kept separate specifically so the
++ * turn-taking logic is unit-testable without a browser or a real mic.
++ *
++ * Deliberately simple (RMS-over-threshold with a hangover window) —
++ * not a trained VAD model. Good enough to detect "is someone talking
++ * right now" for turn-taking in a quiet-ish environment; will false-
++ * trigger on loud background noise. A model-based VAD (e.g. via a
++ * WASM port of Silero VAD) would be the natural upgrade if this proves
++ * too noise-sensitive in practice.
++ */
++
++export interface VadState {
++  isSpeaking: boolean;
++  /** ms of continuous silence observed since speech last stopped */
++  silenceDurationMs: number;
++}
++
++export interface VadConfig {
++  /** RMS amplitude (0-1) above which a frame counts as "speech" */
++  energyThreshold: number;
++  /** how long silence must persist before we call the utterance over */
++  silenceTimeoutMs: number;
++}
++
++export const DEFAULT_VAD_CONFIG: VadConfig = {
++  energyThreshold: 0.02,
++  silenceTimeoutMs: 700,
++};
++
++/**
++ * Called once per audio frame with the frame's RMS energy and the time
++ * elapsed since the last frame. Returns the next state and whether this
++ * frame completes an utterance (speech was happening, then silence
++ * persisted past the timeout).
++ */
++export function nextVadState(
++  previous: VadState,
++  frameRms: number,
++  deltaMs: number,
++  config: VadConfig = DEFAULT_VAD_CONFIG,
++): { state: VadState; utteranceEnded: boolean } {
++  const frameIsSpeech = frameRms >= config.energyThreshold;
++
++  if (frameIsSpeech) {
++    return { state: { isSpeaking: true, silenceDurationMs: 0 }, utteranceEnded: false };
++  }
++
++  if (!previous.isSpeaking) {
++    return { state: { isSpeaking: false, silenceDurationMs: 0 }, utteranceEnded: false };
++  }
++
++  const silenceDurationMs = previous.silenceDurationMs + deltaMs;
++  const utteranceEnded = silenceDurationMs >= config.silenceTimeoutMs;
++
++  return {
++    state: { isSpeaking: utteranceEnded ? false : true, silenceDurationMs },
++    utteranceEnded,
++  };
++}
++
++/** RMS (root-mean-square) amplitude of a Float32 audio sample buffer, 0-1. */
++export function computeRms(samples: Float32Array): number {
++  if (samples.length === 0) return 0;
++  let sumSquares = 0;
++  for (let i = 0; i < samples.length; i++) {
++    sumSquares += samples[i]! * samples[i]!;
++  }
++  return Math.sqrt(sumSquares / samples.length);
++}
+diff -ruN '--exclude=node_modules' '--exclude=.next' '--exclude=package-lock.json' '--exclude=tsconfig.tsbuildinfo' '--exclude=next-env.d.ts' '--exclude=.git' va-mentor-base/src/types/database.ts va-avatars/src/types/database.ts
+--- va-mentor-base/src/types/database.ts	2026-07-21 09:11:27.918865786 +0000
++++ va-avatars/src/types/database.ts	2026-07-23 02:13:27.111338016 +0000
+@@ -22,16 +22,19 @@
+           plan: "free" | "pro";
+           onboarding_completed_at: string | null;
+           terms_accepted_at: string | null;
+-          profession:
+-            | "Student"
+-            | "Professional"
+-            | "Manager"
+-            | "Executive"
+-            | "Founder"
+-            | "Consultant"
+-            | "Job Seeker"
++          organization_name: string | null;
++          country: string | null;
++          industry_id: string | null;
++          functional_area_id: string | null;
++          current_role_id: string | null;
++          career_level:
++            | "Entry Level"
++            | "Early Career"
++            | "Mid Level"
++            | "Senior Level"
++            | "Executive Level"
++            | "Board Level"
+             | null;
+-          experience_level: "Beginner" | "Intermediate" | "Advanced" | null;
+           primary_goal:
+             | "Improve Confidence"
+             | "Executive Presence"
+@@ -53,16 +56,19 @@
+           plan?: "free" | "pro";
+           onboarding_completed_at?: string | null;
+           terms_accepted_at?: string | null;
+-          profession?:
+-            | "Student"
+-            | "Professional"
+-            | "Manager"
+-            | "Executive"
+-            | "Founder"
+-            | "Consultant"
+-            | "Job Seeker"
++          organization_name?: string | null;
++          country?: string | null;
++          industry_id?: string | null;
++          functional_area_id?: string | null;
++          current_role_id?: string | null;
++          career_level?:
++            | "Entry Level"
++            | "Early Career"
++            | "Mid Level"
++            | "Senior Level"
++            | "Executive Level"
++            | "Board Level"
+             | null;
+-          experience_level?: "Beginner" | "Intermediate" | "Advanced" | null;
+           primary_goal?:
+             | "Improve Confidence"
+             | "Executive Presence"
+@@ -84,16 +90,19 @@
+           plan?: "free" | "pro";
+           onboarding_completed_at?: string | null;
+           terms_accepted_at?: string | null;
+-          profession?:
+-            | "Student"
+-            | "Professional"
+-            | "Manager"
+-            | "Executive"
+-            | "Founder"
+-            | "Consultant"
+-            | "Job Seeker"
++          organization_name?: string | null;
++          country?: string | null;
++          industry_id?: string | null;
++          functional_area_id?: string | null;
++          current_role_id?: string | null;
++          career_level?:
++            | "Entry Level"
++            | "Early Career"
++            | "Mid Level"
++            | "Senior Level"
++            | "Executive Level"
++            | "Board Level"
+             | null;
+-          experience_level?: "Beginner" | "Intermediate" | "Advanced" | null;
+           primary_goal?:
+             | "Improve Confidence"
+             | "Executive Presence"
+@@ -107,6 +116,46 @@
+           created_at?: string;
+           updated_at?: string;
+         };
++        Relationships: [
++          {
++            foreignKeyName: "profiles_industry_id_fkey";
++            columns: ["industry_id"];
++            isOneToOne: false;
++            referencedRelation: "industries";
++            referencedColumns: ["id"];
++          },
++          {
++            foreignKeyName: "profiles_functional_area_id_fkey";
++            columns: ["functional_area_id"];
++            isOneToOne: false;
++            referencedRelation: "functional_areas";
++            referencedColumns: ["id"];
++          },
++          {
++            foreignKeyName: "profiles_current_role_id_fkey";
++            columns: ["current_role_id"];
++            isOneToOne: false;
++            referencedRelation: "current_roles";
++            referencedColumns: ["id"];
++          },
++        ];
++      };
++      industries: {
++        Row: { id: string; slug: string; name: string; is_active: boolean; created_at: string };
++        Insert: { id?: string; slug: string; name: string; is_active?: boolean; created_at?: string };
++        Update: { id?: string; slug?: string; name?: string; is_active?: boolean; created_at?: string };
++        Relationships: [];
++      };
++      functional_areas: {
++        Row: { id: string; slug: string; name: string; is_active: boolean; created_at: string };
++        Insert: { id?: string; slug: string; name: string; is_active?: boolean; created_at?: string };
++        Update: { id?: string; slug?: string; name?: string; is_active?: boolean; created_at?: string };
++        Relationships: [];
++      };
++      current_roles: {
++        Row: { id: string; slug: string; name: string; is_active: boolean; created_at: string };
++        Insert: { id?: string; slug: string; name: string; is_active?: boolean; created_at?: string };
++        Update: { id?: string; slug?: string; name?: string; is_active?: boolean; created_at?: string };
+         Relationships: [];
+       };
+       legal_documents: {
+@@ -815,6 +864,9 @@
+ // Convenience row aliases used throughout the app instead of reaching
+ // into Database["public"]["Tables"][...] everywhere.
+ export type Profile = Database["public"]["Tables"]["profiles"]["Row"];
++export type Industry = Database["public"]["Tables"]["industries"]["Row"];
++export type FunctionalArea = Database["public"]["Tables"]["functional_areas"]["Row"];
++export type CurrentRole = Database["public"]["Tables"]["current_roles"]["Row"];
+ export type LegalDocument = Database["public"]["Tables"]["legal_documents"]["Row"];
+ export type LegalAcceptance = Database["public"]["Tables"]["legal_acceptances"]["Row"];
+ export type UserPreferences = Database["public"]["Tables"]["user_preferences"]["Row"];
+diff -ruN '--exclude=node_modules' '--exclude=.next' '--exclude=package-lock.json' '--exclude=tsconfig.tsbuildinfo' '--exclude=next-env.d.ts' '--exclude=.git' va-mentor-base/stage5-and-fixes.patch va-avatars/stage5-and-fixes.patch
+--- va-mentor-base/stage5-and-fixes.patch	2026-07-21 09:11:27.918865786 +0000
++++ va-avatars/stage5-and-fixes.patch	1970-01-01 00:00:00.000000000 +0000
+@@ -1,550 +0,0 @@
+-diff -ruN '--exclude=node_modules' '--exclude=.next' '--exclude=package-lock.json' '--exclude=tsconfig.tsbuildinfo' '--exclude=next-env.d.ts' '--exclude=.git' va-live-check/.env.example va-current/.env.example
+---- va-live-check/.env.example	1970-01-01 00:00:00.000000000 +0000
+-+++ va-current/.env.example	2026-07-19 07:46:51.213694767 +0000
+-@@ -0,0 +1,20 @@
+-+# ── Supabase ──────────────────────────────────────────────────────────
+-+# Public (safe to expose to the browser)
+-+NEXT_PUBLIC_SUPABASE_URL=https://YOUR-PROJECT-REF.supabase.co
+-+NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-key
+-+
+-+# Server-only — NEVER prefix with NEXT_PUBLIC_, never import in a client component
+-+SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
+-+
+-+# ── App ───────────────────────────────────────────────────────────────
+-+NEXT_PUBLIC_APP_URL=http://localhost:3000
+-+
+-+# ── Groq (Stage 2 — Mentor / Groq Integration) ───────────────────────────
+-+GROQ_API_KEY=
+-+GROQ_MODEL_CHAT=
+-+GROQ_MODEL_UTILITY=
+-+GROQ_MODEL_STT=
+-+GROQ_MODEL_TTS=
+-+
+-+# ── Cron / internal routes (added later) ───────────────────────────────
+-+# INTERNAL_CRON_SECRET=
+-diff -ruN '--exclude=node_modules' '--exclude=.next' '--exclude=package-lock.json' '--exclude=tsconfig.tsbuildinfo' '--exclude=next-env.d.ts' '--exclude=.git' va-live-check/README.md va-current/README.md
+---- va-live-check/README.md	2026-07-19 07:43:33.525683016 +0000
+-+++ va-current/README.md	2026-07-19 07:47:04.089470161 +0000
+-@@ -1,4 +1,4 @@
+--# VA Phase 1: Foundation
+-+# VAM Phase 1: Foundation
+- 
+- Production foundation for VA: authentication, database, and core UI shell.
+- Mentor chat, Groq integration, voice, assessments, and progress are **not**
+-diff -ruN '--exclude=node_modules' '--exclude=.next' '--exclude=package-lock.json' '--exclude=tsconfig.tsbuildinfo' '--exclude=next-env.d.ts' '--exclude=.git' va-live-check/docs/STAGE-2-NOTES.md va-current/docs/STAGE-2-NOTES.md
+---- va-live-check/docs/STAGE-2-NOTES.md	2026-07-19 07:43:33.528510016 +0000
+-+++ va-current/docs/STAGE-2-NOTES.md	1970-01-01 00:00:00.000000000 +0000
+-@@ -1,117 +0,0 @@
+--# VA — Stage 2 Implementation Notes
+--
+--Companion to `docs/blueprint/VA-Phase1-Technical-Blueprint.md` and the
+--Phase 1A audit docs. Records the scope decisions and known gaps in the
+--Stage 2 build (Mentor Domain Model, Mentor Matching Engine, Groq
+--Integration, Conversation Memory, Voice Layer, Progress Tracking) so
+--they're not mistaken for oversights later.
+--
+--## Scope note: Mentor Matching Engine wasn't in the original blueprint
+--
+--The Phase 1 blueprint specified a single, fixed mentor persona for
+--Phase 1. Stage 2 was asked for explicitly as a matching engine across
+--multiple personas, so four mentor personas (`the-coach`, `the-guide`,
+--`the-strategist`, `the-sparring-partner`) were seeded in migration 0011
+--and a deterministic scoring engine (`src/lib/mentor/matching.ts`) picks
+--between them based on the profile/preference fields already collected
+--during onboarding. This is a genuine scope expansion, done deliberately,
+--not a misreading of the original architecture doc.
+--
+--## Not live-tested: Groq API
+--
+--`api.groq.com` is not reachable from the environment this was built in.
+--Every Groq-calling function (`src/lib/groq/client.ts`: chat completion
+--streaming, JSON-mode completion, transcription, speech synthesis) is
+--implemented against Groq's documented REST API shape (OpenAI-compatible
+--`/openai/v1/chat/completions`, `/audio/transcriptions`, `/audio/speech`)
+--but has never actually been called. Before relying on this:
+--
+--1. Verify `GROQ_MODEL_CHAT`, `GROQ_MODEL_UTILITY`, `GROQ_MODEL_STT`,
+--   `GROQ_MODEL_TTS` in `.env.local`/Vercel are real, currently-available
+--   Groq-hosted model names — Groq's model catalog changes over time and
+--   this repo does not hardcode any model name, specifically so it can't
+--   silently go stale in code.
+--2. Verify Groq's `/audio/speech` endpoint and request shape match what
+--   `synthesizeSpeech()` sends — this was implemented from a general
+--   understanding of Groq's TTS offering, not a verified live spec.
+--3. Run one real end-to-end chat turn against a real Groq key before
+--   trusting the SSE-parsing logic in `mentor-chat.tsx` and
+--   `readGroqSseText()` in `/api/chat/route.ts` — both assume the
+--   standard OpenAI-style `data: {"choices":[{"delta":{"content":"..."}}]}`
+--   SSE chunk shape.
+--
+--## Deliberate gap: no embedding-based memory retrieval
+--
+--`memory_items.embedding` (migration 0014) exists in the schema but is
+--never populated or queried. Groq does not offer an embeddings endpoint;
+--no other embedding provider has been selected. Retrieval
+--(`src/lib/memory/retrieval.ts`) ranks purely by `importance x
+--recency-decay`. This is fine for a small number of memory items per
+--user but will degrade as memory grows — revisit once an embedding
+--provider is chosen (this only requires changing `getRelevantMemories`,
+--not the schema).
+--
+--## Deliberate gap: memory extraction and progress snapshots are synchronous, not queued
+--
+--The Phase 1 blueprint (Section 6.4) describes memory extraction as a
+--queued Postgres/pg_cron job. Stage 2 instead runs extraction inline,
+--after the streamed reply is buffered, inside the same request's async
+--tail (`persistFullReply` in `/api/chat/route.ts`) — extraction runs
+--every 6 messages, non-blocking to the client response. Progress
+--snapshot recording (`recordActivitySnapshot`) runs on every turn. Both
+--are fire-and-forget from the client's perspective but still consume
+--server compute per request. Acceptable at current scale; revisit with
+--real queue infrastructure if Groq utility-call volume or database write
+--volume becomes a cost/latency concern.
+--
+--## Deliberate gap: assessments are not part of Stage 2
+--
+--Progress Tracking (Stage 2.6) is activity-derived only (`total_messages`,
+--`day_streak`). `progress_snapshots.source` already distinguishes
+--`'activity'` from `'assessment'` so assessment-derived snapshots can be
+--added later without a schema change — but no assessment engine exists
+--in this codebase yet.
+--
+--## Voice: placeholder voice identifiers
+--
+--`mentors.voice_id` values (e.g. `voice-warm-male-01`) and the fallback
+--map in `src/lib/voice/provider.ts` are placeholders, not real
+--identifiers from any specific TTS provider's voice catalog. Replace
+--these with real voice IDs once the actual TTS provider/catalog is
+--confirmed against Groq's live API (or a different provider, if Groq's
+--TTS offering turns out not to fit — the `VoiceProvider`-style
+--abstraction in `resolveVoiceId()` is the only place that would need to
+--change).
+--
+--## Voice gender switching — how it actually works
+--
+--`user_preferences.voice_gender` (`'auto' | 'male' | 'female'`, migration
+--0016) is user-editable directly via the RLS-scoped browser client (no
+--custom API route — the existing owner-update policy on
+--`user_preferences` already permits it). `/api/voice/tts` re-reads this
+--preference on every request and resolves the actual voice via
+--`resolveVoiceId()`, so a change takes effect on the very next spoken
+--reply with no client-side state to keep in sync. `'auto'` defers to
+--whichever mentor is currently assigned; `'male'`/`'female'` always
+--override it, regardless of mentor.
+--
+--## Security pattern followed for all new privileged code
+--
+--Every new privileged operation (`/api/chat`, `/api/voice/stt`,
+--`/api/voice/tts`, `/api/mentor/rematch`) starts with
+--`verifyAuthenticatedUser()` before touching the admin client, per
+--ADR-002 and the Phase 1A audit's established pattern — including the
+--soft-delete rejection added in that audit, which now also protects
+--every Stage 2 route for free.
+--
+--## What was actually validated in this environment
+--
+--`npm run lint`, `npx tsc --noEmit`, `npx vitest run` (39 passing, 6
+--still-skipped DB integration tests unrelated to Stage 2), and
+--`npm run build` were all executed against the real repository with
+--Stage 2 code included, and all passed. What was **not** validated:
+--any live Groq API call, any live Supabase migration apply (same
+--sandbox limitation as the Phase 1A audit — no Docker daemon available
+--here), and no browser-level test of `MediaRecorder`/audio playback
+--(jsdom, used by this project's test environment, does not implement
+--either).
+-diff -ruN '--exclude=node_modules' '--exclude=.next' '--exclude=package-lock.json' '--exclude=tsconfig.tsbuildinfo' '--exclude=next-env.d.ts' '--exclude=.git' va-live-check/package.json va-current/package.json
+---- va-live-check/package.json	2026-07-19 07:43:33.529683016 +0000
+-+++ va-current/package.json	2026-07-19 07:46:51.232831927 +0000
+-@@ -1,5 +1,5 @@
+- {
+--  "name": "va",
+-+  "name": "vam",
+-   "version": "0.1.0",
+-   "private": true,
+-   "scripts": {
+-diff -ruN '--exclude=node_modules' '--exclude=.next' '--exclude=package-lock.json' '--exclude=tsconfig.tsbuildinfo' '--exclude=next-env.d.ts' '--exclude=.git' va-live-check/src/app/(app)/insights/page.tsx va-current/src/app/(app)/insights/page.tsx
+---- va-live-check/src/app/(app)/insights/page.tsx	1970-01-01 00:00:00.000000000 +0000
+-+++ va-current/src/app/(app)/insights/page.tsx	2026-07-19 07:47:56.133698626 +0000
+-@@ -0,0 +1,112 @@
+-+import { redirect } from "next/navigation";
+-+import { createClient } from "@/lib/supabase/server";
+-+import { Card } from "@/components/ui/card";
+-+import { Sparkline } from "@/components/progress/sparkline";
+-+import { completionRate, summarizeFeedback, buildAssessmentTrends } from "@/lib/analytics/aggregate";
+-+
+-+export default async function InsightsPage() {
+-+  const supabase = await createClient();
+-+
+-+  const {
+-+    data: { user },
+-+  } = await supabase.auth.getUser();
+-+
+-+  if (!user) {
+-+    redirect("/sign-in");
+-+  }
+-+
+-+  const [{ data: goals }, { data: actionItems }, { data: feedback }, { data: assessmentScores }] =
+-+    await Promise.all([
+-+      supabase.from("goals").select("status").eq("user_id", user.id),
+-+      supabase.from("action_plan_items").select("is_completed").eq("user_id", user.id),
+-+      supabase.from("message_feedback").select("rating").eq("user_id", user.id),
+-+      supabase
+-+        .from("assessment_scores")
+-+        .select("scores, created_at")
+-+        .eq("user_id", user.id)
+-+        .order("created_at", { ascending: true }),
+-+    ]);
+-+
+-+  const goalsCompleted = (goals ?? []).filter((g) => g.status === "completed").length;
+-+  const goalCompletionPct = completionRate(goalsCompleted, (goals ?? []).length);
+-+
+-+  const actionItemsCompleted = (actionItems ?? []).filter((i) => i.is_completed).length;
+-+  const actionCompletionPct = completionRate(actionItemsCompleted, (actionItems ?? []).length);
+-+
+-+  const feedbackSummary = summarizeFeedback((feedback ?? []).map((f) => f.rating));
+-+
+-+  const trends = buildAssessmentTrends(
+-+    (assessmentScores ?? []).map((s) => s.scores as Record<string, number>),
+-+  );
+-+
+-+  return (
+-+    <div className="space-y-8">
+-+      <div>
+-+        <h1 className="text-2xl font-semibold text-slate-900">Insights</h1>
+-+        <p className="mt-1 text-sm text-slate-500">
+-+          A rollup across goals, action plans, mentor feedback, and assessments.
+-+        </p>
+-+      </div>
+-+
+-+      <div className="grid gap-4 sm:grid-cols-3">
+-+        <Card>
+-+          <h2 className="text-sm font-medium text-slate-500">Goal completion</h2>
+-+          <p className="mt-2 text-2xl font-semibold text-slate-900">{goalCompletionPct}%</p>
+-+          <p className="mt-1 text-xs text-slate-400">
+-+            {goalsCompleted} of {(goals ?? []).length} goals completed
+-+          </p>
+-+        </Card>
+-+        <Card>
+-+          <h2 className="text-sm font-medium text-slate-500">Action plan completion</h2>
+-+          <p className="mt-2 text-2xl font-semibold text-slate-900">{actionCompletionPct}%</p>
+-+          <p className="mt-1 text-xs text-slate-400">
+-+            {actionItemsCompleted} of {(actionItems ?? []).length} items completed
+-+          </p>
+-+        </Card>
+-+        <Card>
+-+          <h2 className="text-sm font-medium text-slate-500">Mentor quality</h2>
+-+          <p className="mt-2 text-2xl font-semibold text-slate-900">
+-+            {feedbackSummary.positiveRate !== null ? `${feedbackSummary.positiveRate}%` : "—"}
+-+          </p>
+-+          <p className="mt-1 text-xs text-slate-400">
+-+            {feedbackSummary.totalRatings > 0
+-+              ? `positive across ${feedbackSummary.totalRatings} rated replies`
+-+              : "No ratings yet — use 👍/👎 in chat"}
+-+          </p>
+-+        </Card>
+-+      </div>
+-+
+-+      {trends.length > 0 ? (
+-+        <div>
+-+          <h2 className="mb-3 text-lg font-medium text-slate-900">Assessment trends</h2>
+-+          <div className="grid gap-4 sm:grid-cols-2">
+-+            {trends.map((trend) => (
+-+              <Card key={trend.dimension}>
+-+                <div className="flex items-center justify-between">
+-+                  <h3 className="text-sm font-medium capitalize text-slate-700">
+-+                    {trend.dimension.replace(/_/g, " ")}
+-+                  </h3>
+-+                  {trend.delta !== null ? (
+-+                    <span
+-+                      className={`text-xs font-medium ${trend.delta >= 0 ? "text-emerald-600" : "text-red-600"}`}
+-+                    >
+-+                      {trend.delta >= 0 ? "+" : ""}
+-+                      {trend.delta}
+-+                    </span>
+-+                  ) : null}
+-+                </div>
+-+                <div className="mt-2">
+-+                  <Sparkline values={trend.values} />
+-+                </div>
+-+              </Card>
+-+            ))}
+-+          </div>
+-+        </div>
+-+      ) : (
+-+        <p className="text-sm text-slate-400">
+-+          Take an assessment to start tracking dimension-level trends here.
+-+        </p>
+-+      )}
+-+    </div>
+-+  );
+-+}
+-diff -ruN '--exclude=node_modules' '--exclude=.next' '--exclude=package-lock.json' '--exclude=tsconfig.tsbuildinfo' '--exclude=next-env.d.ts' '--exclude=.git' va-live-check/src/app/(app)/settings/profile/page.tsx va-current/src/app/(app)/settings/profile/page.tsx
+---- va-live-check/src/app/(app)/settings/profile/page.tsx	2026-07-19 07:43:33.537089531 +0000
+-+++ va-current/src/app/(app)/settings/profile/page.tsx	2026-07-19 07:48:29.574156339 +0000
+-@@ -36,8 +36,21 @@
+-           <p className="font-medium text-slate-900">{profile?.timezone}</p>
+-         </div>
+-       </Card>
+-+      <Card>
+-+        <h2 className="font-medium text-slate-900">Your data</h2>
+-+        <p className="mt-1 text-sm text-slate-500">
+-+          Download everything stored about you — profile, goals, conversations, memory, and
+-+          assessment history — as a single JSON file.
+-+        </p>
+-+        <a
+-+          href="/api/export"
+-+          className="mt-3 inline-block rounded-xl bg-slate-100 px-4 py-2 text-sm font-medium text-slate-900 hover:bg-slate-200"
+-+        >
+-+          Download my data
+-+        </a>
+-+      </Card>
+-       <p className="text-sm text-slate-400">
+--        Editable settings, communication DNA view, and data export arrive in a later phase.
+-+        Editable settings and a communication DNA view arrive in a later phase.
+-       </p>
+-     </div>
+-   );
+-diff -ruN '--exclude=node_modules' '--exclude=.next' '--exclude=package-lock.json' '--exclude=tsconfig.tsbuildinfo' '--exclude=next-env.d.ts' '--exclude=.git' va-live-check/src/app/api/export/route.ts va-current/src/app/api/export/route.ts
+---- va-live-check/src/app/api/export/route.ts	1970-01-01 00:00:00.000000000 +0000
+-+++ va-current/src/app/api/export/route.ts	2026-07-19 07:48:13.061699632 +0000
+-@@ -0,0 +1,70 @@
+-+import { NextResponse } from "next/server";
+-+import { verifyAuthenticatedUser } from "@/lib/supabase/auth-guard";
+-+import { createAdminClient } from "@/lib/supabase/admin";
+-+
+-+/**
+-+ * Stage 5 — data export.
+-+ *
+-+ * Closes a gap flagged as far back as the original Phase 1A CTO Review
+-+ * Pack ("no account deletion / data export endpoints yet"). Returns a
+-+ * JSON snapshot of every table the user owns data in. Uses the admin
+-+ * client only to run one query per table cleanly in parallel — every
+-+ * query is still explicitly scoped to auth.data.user.id, never a
+-+ * client-supplied id, consistent with every other admin-client call
+-+ * site in this codebase.
+-+ */
+-+export async function GET() {
+-+  const auth = await verifyAuthenticatedUser();
+-+  if (!auth.ok) return auth.response;
+-+  const { user } = auth.data;
+-+
+-+  const admin = createAdminClient();
+-+
+-+  const [
+-+    profile,
+-+    preferences,
+-+    goals,
+-+    actionPlans,
+-+    actionPlanItems,
+-+    messages,
+-+    memoryItems,
+-+    assessmentResponses,
+-+    assessmentScores,
+-+    journeyProgress,
+-+    legalAcceptances,
+-+  ] = await Promise.all([
+-+    admin.from("profiles").select("*").eq("id", user.id).single(),
+-+    admin.from("user_preferences").select("*").eq("user_id", user.id).single(),
+-+    admin.from("goals").select("*").eq("user_id", user.id),
+-+    admin.from("action_plans").select("*").eq("user_id", user.id),
+-+    admin.from("action_plan_items").select("*").eq("user_id", user.id),
+-+    admin.from("messages").select("role, content, created_at").eq("user_id", user.id),
+-+    admin.from("memory_items").select("type, content, importance, created_at").eq("user_id", user.id),
+-+    admin.from("assessment_responses").select("*").eq("user_id", user.id),
+-+    admin.from("assessment_scores").select("*").eq("user_id", user.id),
+-+    admin.from("user_journey_progress").select("*").eq("user_id", user.id),
+-+    admin.from("legal_acceptances").select("document_id, accepted_at").eq("user_id", user.id),
+-+  ]);
+-+
+-+  const exportData = {
+-+    exported_at: new Date().toISOString(),
+-+    profile: profile.data,
+-+    preferences: preferences.data,
+-+    goals: goals.data ?? [],
+-+    action_plans: actionPlans.data ?? [],
+-+    action_plan_items: actionPlanItems.data ?? [],
+-+    messages: messages.data ?? [],
+-+    memory_items: memoryItems.data ?? [],
+-+    assessment_responses: assessmentResponses.data ?? [],
+-+    assessment_scores: assessmentScores.data ?? [],
+-+    journey_progress: journeyProgress.data ?? [],
+-+    legal_acceptances: legalAcceptances.data ?? [],
+-+  };
+-+
+-+  return new Response(JSON.stringify(exportData, null, 2), {
+-+    headers: {
+-+      "Content-Type": "application/json",
+-+      "Content-Disposition": `attachment; filename="vam-data-export-${user.id}.json"`,
+-+    },
+-+  });
+-+}
+-diff -ruN '--exclude=node_modules' '--exclude=.next' '--exclude=package-lock.json' '--exclude=tsconfig.tsbuildinfo' '--exclude=next-env.d.ts' '--exclude=.git' va-live-check/src/components/layout/navbar.tsx va-current/src/components/layout/navbar.tsx
+---- va-live-check/src/components/layout/navbar.tsx	2026-07-19 07:43:33.546364793 +0000
+-+++ va-current/src/components/layout/navbar.tsx	2026-07-19 07:48:02.016041945 +0000
+-@@ -35,6 +35,9 @@
+-             <Link href="/journeys" className="text-sm text-slate-600 hover:text-slate-900">
+-               Journeys
+-             </Link>
+-+            <Link href="/insights" className="text-sm text-slate-600 hover:text-slate-900">
+-+              Insights
+-+            </Link>
+-           </nav>
+-         </div>
+-         <div className="flex items-center gap-4">
+-diff -ruN '--exclude=node_modules' '--exclude=.next' '--exclude=package-lock.json' '--exclude=tsconfig.tsbuildinfo' '--exclude=next-env.d.ts' '--exclude=.git' va-live-check/src/lib/analytics/aggregate.ts va-current/src/lib/analytics/aggregate.ts
+---- va-live-check/src/lib/analytics/aggregate.ts	1970-01-01 00:00:00.000000000 +0000
+-+++ va-current/src/lib/analytics/aggregate.ts	2026-07-19 07:47:37.177697499 +0000
+-@@ -0,0 +1,67 @@
+-+/**
+-+ * Stage 5 — Insights dashboard (individual-account analytics).
+-+ *
+-+ * Pure aggregation math only — no I/O — so every function here is
+-+ * directly unit-testable (tests/unit/analytics-aggregate.test.ts). The
+-+ * server component that calls these (src/app/(app)/insights/page.tsx)
+-+ * is responsible for fetching the raw rows and is intentionally kept
+-+ * thin.
+-+ */
+-+
+-+export function completionRate(completed: number, total: number): number {
+-+  if (total === 0) return 0;
+-+  return Math.round((completed / total) * 100);
+-+}
+-+
+-+export interface FeedbackSummary {
+-+  averageRating: number | null;
+-+  totalRatings: number;
+-+  positiveRate: number | null;
+-+}
+-+
+-+/** ratings: array of -1 | 1, one per message_feedback row. */
+-+export function summarizeFeedback(ratings: number[]): FeedbackSummary {
+-+  if (ratings.length === 0) {
+-+    return { averageRating: null, totalRatings: 0, positiveRate: null };
+-+  }
+-+  const positive = ratings.filter((r) => r > 0).length;
+-+  const sum = ratings.reduce((acc, r) => acc + r, 0);
+-+  return {
+-+    averageRating: Math.round((sum / ratings.length) * 100) / 100,
+-+    totalRatings: ratings.length,
+-+    positiveRate: Math.round((positive / ratings.length) * 100),
+-+  };
+-+}
+-+
+-+export interface AssessmentDimensionTrend {
+-+  dimension: string;
+-+  values: number[];
+-+  delta: number | null;
+-+}
+-+
+-+/**
+-+ * Groups assessment_scores.scores (one jsonb blob per submission, taken
+-+ * over time) by dimension key, in chronological order, and computes the
+-+ * change from the first to the most recent value — the simplest
+-+ * possible "are you improving" signal without inventing a scoring
+-+ * model beyond what Groq already returned per submission.
+-+ */
+-+export function buildAssessmentTrends(
+-+  scoresOverTime: Record<string, number>[],
+-+): AssessmentDimensionTrend[] {
+-+  const byDimension = new Map<string, number[]>();
+-+
+-+  for (const scores of scoresOverTime) {
+-+    for (const [dimension, value] of Object.entries(scores)) {
+-+      const existing = byDimension.get(dimension) ?? [];
+-+      existing.push(value);
+-+      byDimension.set(dimension, existing);
+-+    }
+-+  }
+-+
+-+  return Array.from(byDimension.entries()).map(([dimension, values]) => ({
+-+    dimension,
+-+    values,
+-+    delta: values.length >= 2 ? values[values.length - 1]! - values[0]! : null,
+-+  }));
+-+}
+-diff -ruN '--exclude=node_modules' '--exclude=.next' '--exclude=package-lock.json' '--exclude=tsconfig.tsbuildinfo' '--exclude=next-env.d.ts' '--exclude=.git' va-live-check/supabase/config.toml va-current/supabase/config.toml
+---- va-live-check/supabase/config.toml	2026-07-19 07:43:33.551569528 +0000
+-+++ va-current/supabase/config.toml	2026-07-19 07:45:44.597656395 +0000
+-@@ -17,8 +17,8 @@
+- 
+- [auth]
+- enabled = true
+--site_url = https://vam-ai.vercel.app/dashboard
+--additional_redirect_urls =h ttps://vam-ai.vercel.app/auth/callback
+-+site_url = "https://vam-ai.vercel.app"
+-+additional_redirect_urls = ["https://vam-ai.vercel.app/auth/callback"]
+- jwt_expiry = 3600
+- enable_signup = true
+- enable_confirmations = true
+-diff -ruN '--exclude=node_modules' '--exclude=.next' '--exclude=package-lock.json' '--exclude=tsconfig.tsbuildinfo' '--exclude=next-env.d.ts' '--exclude=.git' va-live-check/tests/unit/analytics-aggregate.test.ts va-current/tests/unit/analytics-aggregate.test.ts
+---- va-live-check/tests/unit/analytics-aggregate.test.ts	1970-01-01 00:00:00.000000000 +0000
+-+++ va-current/tests/unit/analytics-aggregate.test.ts	2026-07-19 07:48:53.769702052 +0000
+-@@ -0,0 +1,68 @@
+-+import { describe, expect, it } from "vitest";
+-+import { buildAssessmentTrends, completionRate, summarizeFeedback } from "@/lib/analytics/aggregate";
+-+
+-+describe("completionRate", () => {
+-+  it("returns 0 for an empty set rather than dividing by zero", () => {
+-+    expect(completionRate(0, 0)).toBe(0);
+-+  });
+-+
+-+  it("rounds to the nearest whole percent", () => {
+-+    expect(completionRate(1, 3)).toBe(33);
+-+  });
+-+
+-+  it("returns 100 when everything is complete", () => {
+-+    expect(completionRate(5, 5)).toBe(100);
+-+  });
+-+});
+-+
+-+describe("summarizeFeedback", () => {
+-+  it("returns nulls when there is no feedback yet", () => {
+-+    const result = summarizeFeedback([]);
+-+    expect(result.averageRating).toBeNull();
+-+    expect(result.positiveRate).toBeNull();
+-+    expect(result.totalRatings).toBe(0);
+-+  });
+-+
+-+  it("computes positive rate correctly for a mixed set", () => {
+-+    const result = summarizeFeedback([1, 1, -1, 1]);
+-+    expect(result.totalRatings).toBe(4);
+-+    expect(result.positiveRate).toBe(75);
+-+  });
+-+
+-+  it("computes average rating correctly", () => {
+-+    const result = summarizeFeedback([1, -1]);
+-+    expect(result.averageRating).toBe(0);
+-+  });
+-+});
+-+
+-+describe("buildAssessmentTrends", () => {
+-+  it("groups scores by dimension across multiple submissions in order", () => {
+-+    const trends = buildAssessmentTrends([
+-+      { confidence_pressure: 40, clarity_feedback: 60 },
+-+      { confidence_pressure: 55, clarity_feedback: 65 },
+-+    ]);
+-+
+-+    const confidence = trends.find((t) => t.dimension === "confidence_pressure");
+-+    expect(confidence?.values).toEqual([40, 55]);
+-+    expect(confidence?.delta).toBe(15);
+-+  });
+-+
+-+  it("returns a null delta when only one submission exists", () => {
+-+    const trends = buildAssessmentTrends([{ confidence_pressure: 40 }]);
+-+    expect(trends[0]?.delta).toBeNull();
+-+  });
+-+
+-+  it("returns an empty array when there is no assessment history", () => {
+-+    expect(buildAssessmentTrends([])).toEqual([]);
+-+  });
+-+
+-+  it("handles a dimension that disappears in a later submission without crashing", () => {
+-+    const trends = buildAssessmentTrends([
+-+      { confidence_pressure: 40, clarity_feedback: 60 },
+-+      { confidence_pressure: 55 },
+-+    ]);
+-+    const clarity = trends.find((t) => t.dimension === "clarity_feedback");
+-+    expect(clarity?.values).toEqual([60]);
+-+    expect(clarity?.delta).toBeNull();
+-+  });
+-+});
+diff -ruN '--exclude=node_modules' '--exclude=.next' '--exclude=package-lock.json' '--exclude=tsconfig.tsbuildinfo' '--exclude=next-env.d.ts' '--exclude=.git' va-mentor-base/supabase/migrations/0023_professional_reference_tables.sql va-avatars/supabase/migrations/0023_professional_reference_tables.sql
+--- va-mentor-base/supabase/migrations/0023_professional_reference_tables.sql	1970-01-01 00:00:00.000000000 +0000
++++ va-avatars/supabase/migrations/0023_professional_reference_tables.sql	2026-07-23 02:13:27.124472653 +0000
+@@ -0,0 +1,149 @@
++-- 0023_professional_reference_tables.sql
++-- Product Redefinition — Onboarding Overhaul (Phase 1 of the redefinition).
++--
++-- Three new reference/config tables, same pattern as mentors (0011),
++-- legal_documents (0007), coaching_frameworks (0021): migration-managed,
++-- public read-only, never client-writable. The redefinition brief
++-- specifically calls out that the industry list "should be extensible
++-- and maintained centrally" — a proper table (not a CHECK-constrained
++-- enum column) is what makes adding a new industry later a plain
++-- migration insert rather than an enum-alteration migration. Applied
++-- the same reasoning to functional areas and current roles for
++-- consistency, since both lists are similarly long and expected to grow.
++
++create table if not exists public.industries (
++  id uuid primary key default gen_random_uuid(),
++  slug text not null unique,
++  name text not null,
++  is_active boolean not null default true,
++  created_at timestamptz not null default now()
++);
++
++alter table public.industries enable row level security;
++
++create policy "industries_select_active"
++  on public.industries
++  for select
++  to authenticated
++  using (is_active = true);
++
++create table if not exists public.functional_areas (
++  id uuid primary key default gen_random_uuid(),
++  slug text not null unique,
++  name text not null,
++  is_active boolean not null default true,
++  created_at timestamptz not null default now()
++);
++
++alter table public.functional_areas enable row level security;
++
++create policy "functional_areas_select_active"
++  on public.functional_areas
++  for select
++  to authenticated
++  using (is_active = true);
++
++create table if not exists public.current_roles (
++  id uuid primary key default gen_random_uuid(),
++  slug text not null unique,
++  name text not null,
++  is_active boolean not null default true,
++  created_at timestamptz not null default now()
++);
++
++alter table public.current_roles enable row level security;
++
++create policy "current_roles_select_active"
++  on public.current_roles
++  for select
++  to authenticated
++  using (is_active = true);
++
++-- Seed data — from the product redefinition brief's Industry Selection,
++-- Functional Area, and Current Role lists, verbatim.
++
++insert into public.industries (slug, name) values
++  ('accounting', 'Accounting'),
++  ('audit', 'Audit'),
++  ('agriculture', 'Agriculture'),
++  ('aviation', 'Aviation'),
++  ('banking', 'Banking'),
++  ('capital-markets', 'Capital Markets'),
++  ('consulting', 'Consulting'),
++  ('construction', 'Construction'),
++  ('education', 'Education'),
++  ('energy', 'Energy'),
++  ('engineering', 'Engineering'),
++  ('entertainment', 'Entertainment'),
++  ('financial-services', 'Financial Services'),
++  ('fintech', 'FinTech'),
++  ('government', 'Government'),
++  ('public-sector', 'Public Sector'),
++  ('healthcare', 'Healthcare'),
++  ('hospitality', 'Hospitality'),
++  ('human-resources', 'Human Resources'),
++  ('insurance', 'Insurance'),
++  ('information-technology', 'Information Technology'),
++  ('legal-services', 'Legal Services'),
++  ('logistics', 'Logistics'),
++  ('manufacturing', 'Manufacturing'),
++  ('media', 'Media'),
++  ('mining', 'Mining'),
++  ('non-profit', 'Non-Profit'),
++  ('oil-gas', 'Oil & Gas'),
++  ('pharmaceuticals', 'Pharmaceuticals'),
++  ('procurement', 'Procurement'),
++  ('real-estate', 'Real Estate'),
++  ('retail', 'Retail'),
++  ('telecommunications', 'Telecommunications'),
++  ('technology', 'Technology'),
++  ('transportation', 'Transportation'),
++  ('utilities', 'Utilities'),
++  ('professional-services', 'Professional Services'),
++  ('other', 'Other')
++on conflict (slug) do nothing;
++
++insert into public.functional_areas (slug, name) values
++  ('finance', 'Finance'),
++  ('accounting', 'Accounting'),
++  ('treasury', 'Treasury'),
++  ('audit', 'Audit'),
++  ('tax', 'Tax'),
++  ('operations', 'Operations'),
++  ('human-resources', 'Human Resources'),
++  ('information-technology', 'Information Technology'),
++  ('risk-management', 'Risk Management'),
++  ('compliance', 'Compliance'),
++  ('procurement', 'Procurement'),
++  ('sales', 'Sales'),
++  ('marketing', 'Marketing'),
++  ('customer-service', 'Customer Service'),
++  ('strategy', 'Strategy'),
++  ('legal', 'Legal'),
++  ('administration', 'Administration'),
++  ('business-development', 'Business Development')
++on conflict (slug) do nothing;
++
++insert into public.current_roles (slug, name) values
++  ('intern', 'Intern'),
++  ('graduate-trainee', 'Graduate Trainee'),
++  ('assistant', 'Assistant'),
++  ('officer', 'Officer'),
++  ('analyst', 'Analyst'),
++  ('associate', 'Associate'),
++  ('supervisor', 'Supervisor'),
++  ('specialist', 'Specialist'),
++  ('coordinator', 'Coordinator'),
++  ('team-lead', 'Team Lead'),
++  ('manager', 'Manager'),
++  ('senior-manager', 'Senior Manager'),
++  ('head-of-department', 'Head of Department'),
++  ('general-manager', 'General Manager'),
++  ('director', 'Director'),
++  ('vice-president', 'Vice President'),
++  ('cfo', 'CFO'),
++  ('coo', 'COO'),
++  ('ceo', 'CEO'),
++  ('founder', 'Founder'),
++  ('board-member', 'Board Member')
++on conflict (slug) do nothing;
+diff -ruN '--exclude=node_modules' '--exclude=.next' '--exclude=package-lock.json' '--exclude=tsconfig.tsbuildinfo' '--exclude=next-env.d.ts' '--exclude=.git' va-mentor-base/supabase/migrations/0024_profile_professional_identity.sql va-avatars/supabase/migrations/0024_profile_professional_identity.sql
+--- va-mentor-base/supabase/migrations/0024_profile_professional_identity.sql	1970-01-01 00:00:00.000000000 +0000
++++ va-avatars/supabase/migrations/0024_profile_professional_identity.sql	2026-07-23 02:13:27.125358898 +0000
+@@ -0,0 +1,59 @@
++-- 0024_profile_professional_identity.sql
++-- Product Redefinition — Onboarding Overhaul.
++--
++-- Supersedes migration 0008's profession/experience_level with a more
++-- precise professional-identity model: a specific current role (FK),
++-- a broad career-level band, an industry (FK), a functional area (FK),
++-- an organization name, and a country. primary_goal is untouched — it
++-- answers a different question ("what do you want to achieve") that
++-- the redefinition brief doesn't replace.
++--
++-- career_level stays a simple CHECK-constrained column rather than a
++-- reference table: it's a fixed, ordered 6-value progression band that
++-- the brief doesn't ask to be extensible, unlike industries/functional
++-- areas/current roles. country is deliberately NOT a DB reference
++-- table either — it's validated against a stable, standard list at the
++-- application layer (src/lib/onboarding/constants.ts) rather than
++-- adding a 190+ row table for something that essentially never changes.
++
++alter table public.profiles
++  add column if not exists organization_name text,
++  add column if not exists country text,
++  add column if not exists industry_id uuid references public.industries(id),
++  add column if not exists functional_area_id uuid references public.functional_areas(id),
++  add column if not exists current_role_id uuid references public.current_roles(id),
++  add column if not exists career_level text
++    check (career_level in (
++      'Entry Level', 'Early Career', 'Mid Level',
++      'Senior Level', 'Executive Level', 'Board Level'
++    ));
++
++comment on column public.profiles.organization_name is
++  'Free-text employer/organization name, captured during onboarding.';
++comment on column public.profiles.country is
++  'Self-reported country, validated against src/lib/onboarding/constants.ts COUNTRIES at the application layer.';
++comment on column public.profiles.career_level is
++  'Self-reported career band, captured during onboarding. Distinct from '
++  'current_role_id: a "Manager" at one organization might place '
++  'themselves at Mid Level while at another they''d say Senior Level — '
++  'the two are independently selected, not derived from one another.';
++
++-- profession/experience_level (migration 0008) are superseded by
++-- current_role_id + career_level, which are strictly more precise for
++-- the same purpose (personalizing mentor matching, scenarios, and
++-- prompt context). Dropped rather than left alongside the new columns
++-- to avoid two competing "who is this user, professionally" fields —
++-- same reasoning as dropping profiles.terms_accepted_at in favor of
++-- legal_acceptances during Foundation Hardening.
++alter table public.profiles
++  drop column if exists profession,
++  drop column if exists experience_level;
++
++-- Same self-service column-grant pattern as migration 0008: these are
++-- user-owned professional-identity attributes, not server-controlled
++-- state like plan/onboarding_completed_at, so client-direct RLS update
++-- is appropriate (in addition to the write the onboarding route itself
++-- performs via the admin client at signup time).
++grant update (organization_name, country, industry_id, functional_area_id, current_role_id, career_level)
++  on public.profiles
++  to authenticated;
+diff -ruN '--exclude=node_modules' '--exclude=.next' '--exclude=package-lock.json' '--exclude=tsconfig.tsbuildinfo' '--exclude=next-env.d.ts' '--exclude=.git' va-mentor-base/supabase/migrations/0025_mentor_executive_coach_redefinition.sql va-avatars/supabase/migrations/0025_mentor_executive_coach_redefinition.sql
+--- va-mentor-base/supabase/migrations/0025_mentor_executive_coach_redefinition.sql	1970-01-01 00:00:00.000000000 +0000
++++ va-avatars/supabase/migrations/0025_mentor_executive_coach_redefinition.sql	2026-07-23 02:15:53.956288455 +0000
+@@ -0,0 +1,92 @@
++-- 0025_mentor_executive_coach_redefinition.sql
++-- Product Redefinition — Mentor Redefinition.
++--
++-- Rewrites the four seeded mentor personas (migration 0011) to match
++-- the redefinition brief's explicit requirement: the mentor must not
++-- behave like a general chatbot ("What can I help you with today?"),
++-- it must behave like an Executive Communication Coach / Leadership
++-- Mentor / Strategic Thinking Advisor that proactively challenges the
++-- user, asks probing questions, and pushes recommendation-first
++-- communication ("Think First. Speak Second.").
++--
++-- Each mentor's distinct style (challenging/supportive/balanced/
++-- practice-first — set in migration 0011) is preserved; only the
++-- underlying identity/behavior standard changes. This is an UPDATE,
++-- not a re-seed — mentors is reference/config data, but persona_prompt
++-- content evolving over time doesn't need the full append-only/
++-- versioned-audit-trail treatment legal_documents gets (that pattern
++-- exists because legal acceptance needs a provable "what exact text
++-- did the user agree to" record — mentor persona copy has no such
++-- compliance requirement).
++
++update public.mentors set persona_prompt =
++  'You are Morgan, an Executive Communication Coach — not a general assistant, a ' ||
++  'dedicated coach whose mission is to develop this person into a boardroom-ready ' ||
++  'communicator. You never open passively or ask generic questions like "what can ' ||
++  'I help you with today" — you lead. You are direct, high-energy, and hold the ' ||
++  'user accountable to specific commitments they make, calling out rambling, ' ||
++  'hedging, and delayed recommendations the moment you notice them. You teach and ' ||
++  'enforce recommendation-first communication: "Think First. Speak Second." When ' ||
++  'the user avoids a direct answer, you name it and push them to restate it ' ||
++  'concisely. You are warm underneath the intensity, but you do not soften hard ' ||
++  'truths — your job is their advancement to senior leadership, not their comfort ' ||
++  'in the moment.'
++where slug = 'the-coach';
++
++update public.mentors set persona_prompt =
++  'You are Ava, an Executive Communication Coach focused on building a rock-solid ' ||
++  'communication foundation — clarity, breath control, pacing, and structure — for ' ||
++  'people earlier in developing their executive presence. You are calm and ' ||
++  'structured, but you are still a coach, not a passive assistant: you proactively ' ||
++  'set the agenda for each session rather than waiting to be asked "what do you ' ||
++  'need help with", you check for understanding before moving on, and you name ' ||
++  'specific patterns you notice (filler words, buried recommendations, apologetic ' ||
++  'framing) rather than only offering generic encouragement. You believe ' ||
++  'confidence is built through structured repetition, not talent, and you treat ' ||
++  'every session as one deliberate step in that build.'
++where slug = 'the-guide';
++
++update public.mentors set persona_prompt =
++  'You are Priya, an Executive Communication Coach who teaches strategic, ' ||
++  'structured thinking as the foundation of executive communication — Situation, ' ||
++  'Analysis, Recommendation, in that order, every time. You are balanced and ' ||
++  'analytical: you explain the reasoning behind your feedback and connect it ' ||
++  'explicitly to the user''s career-advancement goal, rather than giving advice in ' ||
++  'a vacuum. You proactively challenge the user''s assumptions and ask probing ' ||
++  'questions that surface the "so what" behind their point before they''ve finished ' ||
++  'making it. You never open a session with an open-ended "how can I help" — you ' ||
++  'arrive with a specific observation or challenge based on what you know about ' ||
++  'this person''s role and goals.'
++where slug = 'the-strategist';
++
++update public.mentors set persona_prompt =
++  'You are Elias, an Executive Communication Coach who runs realistic, high-' ||
++  'stakes practice scenarios rather than giving abstract advice — board ' ||
++  'presentations, budget defences, difficult stakeholder questions, executive ' ||
++  'interviews. You proactively assign a specific, time-boxed scenario at the start ' ||
++  'of a session ("Present a budget request in 90 seconds. Begin when ready.") ' ||
++  'rather than asking what the user wants to work on. After each attempt you give ' ||
++  'sharp, specific, example-based feedback — what exact phrase buried the ' ||
++  'recommendation, where composure slipped, what a board member would have ' ||
++  'pushed back on. You believe the fastest way to build executive presence is ' ||
++  'repetition under realistic pressure, not rehearsed theory.'
++where slug = 'the-sparring-partner';
++
++update public.mentors set tagline =
++  'Direct, high-energy accountability — calls out rambling and delayed recommendations on the spot.'
++where slug = 'the-coach';
++
++update public.mentors set tagline =
++  'Calm, structured coaching for building your communication foundation from the ground up.'
++where slug = 'the-guide';
++
++update public.mentors set tagline =
++  'Strategic thinking coach — Situation, Analysis, Recommendation, every time.'
++where slug = 'the-strategist';
++
++update public.mentors set tagline =
++  'Practice-first — realistic executive scenarios with sharp, specific feedback.'
++where slug = 'the-sparring-partner';
++
++-- Renamed from "Jordan" to "Elias" to match the commissioned avatar art.
++update public.mentors set display_name = 'Elias' where slug = 'the-sparring-partner';
+diff -ruN '--exclude=node_modules' '--exclude=.next' '--exclude=package-lock.json' '--exclude=tsconfig.tsbuildinfo' '--exclude=next-env.d.ts' '--exclude=.git' va-mentor-base/tests/integration/onboarding-completion.test.ts va-avatars/tests/integration/onboarding-completion.test.ts
+--- va-mentor-base/tests/integration/onboarding-completion.test.ts	2026-07-21 09:11:27.922686809 +0000
++++ va-avatars/tests/integration/onboarding-completion.test.ts	2026-07-23 02:13:27.179299838 +0000
+@@ -50,8 +50,7 @@
+       .update({
+         display_name: "Jamie",
+         timezone: "America/New_York",
+-        profession: "Founder",
+-        experience_level: "Intermediate",
++        career_level: "Executive Level",
+         primary_goal: "Executive Presence",
+         onboarding_completed_at: now,
+         terms_accepted_at: now,
+@@ -70,7 +69,7 @@
+       .single();
+ 
+     expect(profile?.onboarding_completed_at).not.toBeNull();
+-    expect(profile?.profession).toBe("Founder");
++    expect(profile?.career_level).toBe("Executive Level");
+ 
+     const { data: acceptances } = await admin
+       .from("legal_acceptances")
+diff -ruN '--exclude=node_modules' '--exclude=.next' '--exclude=package-lock.json' '--exclude=tsconfig.tsbuildinfo' '--exclude=next-env.d.ts' '--exclude=.git' va-mentor-base/tests/unit/groq-prompt-assembly.test.ts va-avatars/tests/unit/groq-prompt-assembly.test.ts
+--- va-mentor-base/tests/unit/groq-prompt-assembly.test.ts	2026-07-21 09:11:27.923658120 +0000
++++ va-avatars/tests/unit/groq-prompt-assembly.test.ts	2026-07-23 02:13:27.184198250 +0000
+@@ -1,5 +1,5 @@
+ import { describe, expect, it } from "vitest";
+-import { buildSystemPrompt } from "@/lib/groq/prompts";
++import { buildOpeningTurnDirective, buildSystemPrompt, type ProfessionalContext } from "@/lib/groq/prompts";
+ import type { Mentor } from "@/types/database";
+ 
+ const mentor: Mentor = {
+@@ -15,11 +15,19 @@
+   created_at: "2026-01-01T00:00:00.000Z",
+ };
+ 
++const emptyProfessional: ProfessionalContext = {
++  organizationName: null,
++  industryName: null,
++  functionalAreaName: null,
++  currentRoleName: null,
++};
++
+ describe("buildSystemPrompt", () => {
+   it("includes the mentor's own persona prompt verbatim as the first section", () => {
+     const prompt = buildSystemPrompt({
+       mentor,
+-      profile: { display_name: "Sam", primary_goal: null, experience_level: null },
++      profile: { display_name: "Sam", primary_goal: null, career_level: null },
++      professional: emptyProfessional,
+       preferences: { coaching_intensity: "medium", mentor_style: "supportive" },
+       memories: [],
+       goals: [],
+@@ -30,7 +38,8 @@
+   it("includes the user's active goals but not paused/completed ones", () => {
+     const prompt = buildSystemPrompt({
+       mentor,
+-      profile: { display_name: "Sam", primary_goal: null, experience_level: null },
++      profile: { display_name: "Sam", primary_goal: null, career_level: null },
++      professional: emptyProfessional,
+       preferences: { coaching_intensity: "medium", mentor_style: "supportive" },
+       memories: [],
+       goals: [
+@@ -45,7 +54,8 @@
+   it("includes memory items with their type, without a raw data-dump framing", () => {
+     const prompt = buildSystemPrompt({
+       mentor,
+-      profile: { display_name: "Sam", primary_goal: null, experience_level: null },
++      profile: { display_name: "Sam", primary_goal: null, career_level: null },
++      professional: emptyProfessional,
+       preferences: { coaching_intensity: "medium", mentor_style: "supportive" },
+       memories: [{ type: "preference", content: "Prefers direct feedback over softened language" }],
+       goals: [],
+@@ -57,11 +67,97 @@
+   it("omits the memory section entirely when there is no memory yet", () => {
+     const prompt = buildSystemPrompt({
+       mentor,
+-      profile: { display_name: "Sam", primary_goal: null, experience_level: null },
++      profile: { display_name: "Sam", primary_goal: null, career_level: null },
++      professional: emptyProfessional,
+       preferences: { coaching_intensity: "medium", mentor_style: "supportive" },
+       memories: [],
+       goals: [],
+     });
+     expect(prompt).not.toContain("Relevant things you remember");
+   });
++
++  it("includes career level and calibration guidance so scenarios aren't one-size-fits-all", () => {
++    const prompt = buildSystemPrompt({
++      mentor,
++      profile: { display_name: "Sam", primary_goal: null, career_level: "Executive Level" },
++      professional: emptyProfessional,
++      preferences: { coaching_intensity: "medium", mentor_style: "supportive" },
++      memories: [],
++      goals: [],
++    });
++    expect(prompt).toContain("Executive Level");
++    expect(prompt).toContain("Board-level");
++  });
++
++  it("weaves in resolved organization/industry/role/functional-area context when present", () => {
++    const prompt = buildSystemPrompt({
++      mentor,
++      profile: { display_name: "Sam", primary_goal: null, career_level: "Senior Level" },
++      professional: {
++        organizationName: "Acme Bank",
++        industryName: "Banking",
++        functionalAreaName: "Treasury",
++        currentRoleName: "Senior Manager",
++      },
++      preferences: { coaching_intensity: "medium", mentor_style: "supportive" },
++      memories: [],
++      goals: [],
++    });
++    expect(prompt).toContain("Senior Manager");
++    expect(prompt).toContain("Treasury");
++    expect(prompt).toContain("Banking");
++    expect(prompt).toContain("Acme Bank");
++  });
++
++  it("omits the role-context clause entirely when nothing professional is known yet", () => {
++    const prompt = buildSystemPrompt({
++      mentor,
++      profile: { display_name: "Sam", primary_goal: null, career_level: null },
++      professional: emptyProfessional,
++      preferences: { coaching_intensity: "medium", mentor_style: "supportive" },
++      memories: [],
++      goals: [],
++    });
++    expect(prompt).toContain("The user's name is Sam.");
++  });
++
++  it("always includes the platform coaching philosophy, regardless of mentor persona", () => {
++    const prompt = buildSystemPrompt({
++      mentor,
++      profile: { display_name: "Sam", primary_goal: null, career_level: null },
++      professional: emptyProfessional,
++      preferences: { coaching_intensity: "medium", mentor_style: "supportive" },
++      memories: [],
++      goals: [],
++    });
++    expect(prompt).toContain("Executive Communication Coach");
++    expect(prompt).toContain("What can I help you with today?");
++    expect(prompt).toContain("Think First. Speak Second.");
++  });
++});
++
++describe("buildOpeningTurnDirective", () => {
++  it("instructs the mentor to open proactively rather than ask a generic question", () => {
++    const directive = buildOpeningTurnDirective({ dayStreak: null, lastSessionNote: null });
++    expect(directive).toContain("SESSION START");
++    expect(directive).toContain("time-boxed challenge");
++  });
++
++  it("tells the model not to fabricate progress when there is none yet", () => {
++    const directive = buildOpeningTurnDirective({ dayStreak: null, lastSessionNote: null });
++    expect(directive).toContain("do not fabricate prior progress");
++  });
++
++  it("surfaces a concrete last-session note when one exists", () => {
++    const directive = buildOpeningTurnDirective({
++      dayStreak: 5,
++      lastSessionNote: "Struggled to lead with a recommendation during a budget scenario.",
++    });
++    expect(directive).toContain("Struggled to lead with a recommendation during a budget scenario.");
++  });
++
++  it("acknowledges an active streak when there is no specific session note", () => {
++    const directive = buildOpeningTurnDirective({ dayStreak: 4, lastSessionNote: null });
++    expect(directive).toContain("4-day streak");
++  });
+ });
+diff -ruN '--exclude=node_modules' '--exclude=.next' '--exclude=package-lock.json' '--exclude=tsconfig.tsbuildinfo' '--exclude=next-env.d.ts' '--exclude=.git' va-mentor-base/tests/unit/mentor-matching.test.ts va-avatars/tests/unit/mentor-matching.test.ts
+--- va-mentor-base/tests/unit/mentor-matching.test.ts	2026-07-21 09:11:27.923658120 +0000
++++ va-avatars/tests/unit/mentor-matching.test.ts	2026-07-23 02:13:27.185899992 +0000
+@@ -37,8 +37,7 @@
+ describe("scoreMentor", () => {
+   it("scores a goal match higher than a style-only match", () => {
+     const input: MatchInput = {
+-      profession: "Job Seeker",
+-      experienceLevel: "Beginner",
++      careerLevel: "Senior Level",
+       primaryGoal: "Ace Interviews",
+       mentorStyle: "balanced",
+       coachingIntensity: "medium",
+@@ -53,8 +52,7 @@
+ 
+   it("rewards coaching_intensity alignment with mentor style", () => {
+     const input: MatchInput = {
+-      profession: "Professional",
+-      experienceLevel: "Intermediate",
++      careerLevel: "Senior Level",
+       primaryGoal: null,
+       mentorStyle: "balanced",
+       coachingIntensity: "high",
+@@ -66,8 +64,7 @@
+ 
+   it("falls back to 'default_fallback' when nothing matches", () => {
+     const input: MatchInput = {
+-      profession: null,
+-      experienceLevel: null,
++      careerLevel: null,
+       primaryGoal: null,
+       mentorStyle: "balanced",
+       coachingIntensity: "medium",
+@@ -82,8 +79,7 @@
+ describe("pickBestMentor", () => {
+   it("picks the mentor whose best_fit_goals includes the user's primary goal", () => {
+     const input: MatchInput = {
+-      profession: "Student",
+-      experienceLevel: "Beginner",
++      careerLevel: "Senior Level",
+       primaryGoal: "Improve Confidence",
+       mentorStyle: "supportive",
+       coachingIntensity: "low",
+@@ -95,8 +91,7 @@
+ 
+   it("never leaves a user unmatched even when no mentor scores above zero", () => {
+     const input: MatchInput = {
+-      profession: null,
+-      experienceLevel: null,
++      careerLevel: null,
+       primaryGoal: null,
+       mentorStyle: "balanced",
+       coachingIntensity: "medium",
+@@ -110,8 +105,7 @@
+ 
+   it("is deterministic across repeated calls with identical input", () => {
+     const input: MatchInput = {
+-      profession: null,
+-      experienceLevel: null,
++      careerLevel: null,
+       primaryGoal: null,
+       mentorStyle: "balanced",
+       coachingIntensity: "medium",
+@@ -124,8 +118,7 @@
+ 
+   it("throws on an empty mentor list rather than silently returning undefined", () => {
+     const input: MatchInput = {
+-      profession: null,
+-      experienceLevel: null,
++      careerLevel: null,
+       primaryGoal: null,
+       mentorStyle: "balanced",
+       coachingIntensity: "medium",
+diff -ruN '--exclude=node_modules' '--exclude=.next' '--exclude=package-lock.json' '--exclude=tsconfig.tsbuildinfo' '--exclude=next-env.d.ts' '--exclude=.git' va-mentor-base/tests/unit/onboarding-schema.test.ts va-avatars/tests/unit/onboarding-schema.test.ts
+--- va-mentor-base/tests/unit/onboarding-schema.test.ts	2026-07-21 09:11:27.923658120 +0000
++++ va-avatars/tests/unit/onboarding-schema.test.ts	2026-07-23 02:13:27.186106390 +0000
+@@ -1,5 +1,6 @@
+ import { describe, expect, it } from "vitest";
+ import { z } from "zod";
++import { CAREER_LEVELS, COUNTRIES } from "@/lib/onboarding/constants";
+ 
+ /**
+  * Priority test #3 (Onboarding completion flow) — validates the request
+@@ -12,21 +13,31 @@
+  * for). If the two schemas drift, this is exactly the kind of gap the
+  * integration test (once wired to a real test project) will catch by
+  * exercising the real route.
++ *
++ * Product Redefinition — Onboarding Overhaul: profession/experience_level
++ * are gone; industryId/functionalAreaId/currentRoleId/careerLevel/
++ * organizationName/country replace them.
+  */
+-const PROFESSIONS = [
+-  "Student",
+-  "Professional",
+-  "Manager",
+-  "Executive",
+-  "Founder",
+-  "Consultant",
+-  "Job Seeker",
++const PRIMARY_GOALS = [
++  "Improve Confidence",
++  "Executive Presence",
++  "Ace Interviews",
++  "Improve Presentations",
++  "Improve Meetings",
++  "Become More Persuasive",
++  "Leadership Communication",
+ ] as const;
+ 
+ const bodySchema = z.object({
+   displayName: z.string().trim().min(1).max(80),
+   timezone: z.string().trim().min(1).max(64),
+-  profession: z.enum(PROFESSIONS).optional(),
++  country: z.enum(COUNTRIES).optional(),
++  organizationName: z.string().trim().max(160).optional(),
++  industryId: z.string().uuid().optional(),
++  functionalAreaId: z.string().uuid().optional(),
++  currentRoleId: z.string().uuid().optional(),
++  careerLevel: z.enum(CAREER_LEVELS).optional(),
++  primaryGoal: z.enum(PRIMARY_GOALS).optional(),
+   acceptedDocumentIds: z.array(z.string().uuid()).default([]),
+ });
+ 
+@@ -44,11 +55,44 @@
+     expect(result.success).toBe(false);
+   });
+ 
+-  it("rejects a profession outside the allowed set", () => {
++  it("accepts a full professional-identity payload", () => {
+     const result = bodySchema.safeParse({
+       displayName: "Jamie",
+       timezone: "UTC",
+-      profession: "Wizard",
++      country: "Nigeria",
++      organizationName: "Acme Bank",
++      industryId: "550e8400-e29b-41d4-a716-446655440000",
++      functionalAreaId: "550e8400-e29b-41d4-a716-446655440001",
++      currentRoleId: "550e8400-e29b-41d4-a716-446655440002",
++      careerLevel: "Executive Level",
++      primaryGoal: "Executive Presence",
++    });
++    expect(result.success).toBe(true);
++  });
++
++  it("rejects a career level outside the fixed six-value progression", () => {
++    const result = bodySchema.safeParse({
++      displayName: "Jamie",
++      timezone: "UTC",
++      careerLevel: "Wizard Level",
++    });
++    expect(result.success).toBe(false);
++  });
++
++  it("rejects a country outside the known list", () => {
++    const result = bodySchema.safeParse({
++      displayName: "Jamie",
++      timezone: "UTC",
++      country: "Narnia",
++    });
++    expect(result.success).toBe(false);
++  });
++
++  it("rejects a non-uuid industryId", () => {
++    const result = bodySchema.safeParse({
++      displayName: "Jamie",
++      timezone: "UTC",
++      industryId: "not-a-uuid",
+     });
+     expect(result.success).toBe(false);
+   });
+diff -ruN '--exclude=node_modules' '--exclude=.next' '--exclude=package-lock.json' '--exclude=tsconfig.tsbuildinfo' '--exclude=next-env.d.ts' '--exclude=.git' va-mentor-base/tests/unit/sentence-chunker.test.ts va-avatars/tests/unit/sentence-chunker.test.ts
+--- va-mentor-base/tests/unit/sentence-chunker.test.ts	1970-01-01 00:00:00.000000000 +0000
++++ va-avatars/tests/unit/sentence-chunker.test.ts	2026-07-23 02:13:27.180744325 +0000
+@@ -0,0 +1,62 @@
++import { describe, expect, it } from "vitest";
++import { extractCompletedSentences, flushRemainingBuffer, initialChunkerState } from "@/lib/voice/sentence-chunker";
++
++describe("extractCompletedSentences", () => {
++  it("returns no sentences until a boundary is reached", () => {
++    const { newSentences, nextState } = extractCompletedSentences("Let's talk about your goal", initialChunkerState);
++    expect(newSentences).toEqual([]);
++    expect(nextState.pendingBuffer).toBe("Let's talk about your goal");
++  });
++
++  it("extracts a completed sentence once punctuation and whitespace follow", () => {
++    const { newSentences, nextState } = extractCompletedSentences(
++      "Let's talk about your goal. What's on your mind",
++      initialChunkerState,
++    );
++    expect(newSentences).toEqual(["Let's talk about your goal."]);
++    expect(nextState.pendingBuffer).toBe("What's on your mind");
++  });
++
++  it("only processes text that hasn't already been seen, across multiple calls", () => {
++    const first = extractCompletedSentences("First sentence here. ", initialChunkerState);
++    expect(first.newSentences).toEqual(["First sentence here."]);
++
++    const second = extractCompletedSentences("First sentence here. Second one now.", first.nextState);
++    expect(second.newSentences).toEqual(["Second one now."]);
++    // Must not re-emit the first sentence.
++    expect(second.nextState.sentSentences).toEqual(["First sentence here.", "Second one now."]);
++  });
++
++  it("does not split on a short abbreviation-like fragment (e.g. 'Dr.')", () => {
++    const { newSentences } = extractCompletedSentences("Dr. Smith recommended", initialChunkerState);
++    expect(newSentences).toEqual([]);
++  });
++
++  it("handles multiple complete sentences arriving in one chunk", () => {
++    const { newSentences } = extractCompletedSentences(
++      "First point stands. Second point matters too. Third point closes it out.",
++      initialChunkerState,
++    );
++    expect(newSentences).toEqual([
++      "First point stands.",
++      "Second point matters too.",
++      "Third point closes it out.",
++    ]);
++  });
++
++  it("handles exclamation and question marks as sentence boundaries", () => {
++    const { newSentences } = extractCompletedSentences("That went great! Ready for the next one?", initialChunkerState);
++    expect(newSentences).toEqual(["That went great!", "Ready for the next one?"]);
++  });
++});
++
++describe("flushRemainingBuffer", () => {
++  it("returns null when the buffer is empty", () => {
++    expect(flushRemainingBuffer(initialChunkerState)).toBeNull();
++  });
++
++  it("returns the trimmed trailing partial sentence", () => {
++    const { nextState } = extractCompletedSentences("A finished one. And an unfinished tail", initialChunkerState);
++    expect(flushRemainingBuffer(nextState)).toBe("And an unfinished tail");
++  });
++});
+diff -ruN '--exclude=node_modules' '--exclude=.next' '--exclude=package-lock.json' '--exclude=tsconfig.tsbuildinfo' '--exclude=next-env.d.ts' '--exclude=.git' va-mentor-base/tests/unit/vad.test.ts va-avatars/tests/unit/vad.test.ts
+--- va-mentor-base/tests/unit/vad.test.ts	1970-01-01 00:00:00.000000000 +0000
++++ va-avatars/tests/unit/vad.test.ts	2026-07-23 02:13:27.180112360 +0000
+@@ -0,0 +1,59 @@
++import { describe, expect, it } from "vitest";
++import { computeRms, nextVadState, DEFAULT_VAD_CONFIG } from "@/lib/voice/vad";
++
++describe("computeRms", () => {
++  it("returns 0 for silence (all-zero samples)", () => {
++    expect(computeRms(new Float32Array([0, 0, 0, 0]))).toBe(0);
++  });
++
++  it("returns 0 for an empty buffer rather than dividing by zero", () => {
++    expect(computeRms(new Float32Array([]))).toBe(0);
++  });
++
++  it("returns 1 for a full-scale constant signal", () => {
++    expect(computeRms(new Float32Array([1, 1, 1, 1]))).toBeCloseTo(1);
++  });
++});
++
++describe("nextVadState", () => {
++  const idle = { isSpeaking: false, silenceDurationMs: 0 };
++
++  it("transitions to speaking the instant a loud frame arrives", () => {
++    const { state, utteranceEnded } = nextVadState(idle, 0.5, 16, DEFAULT_VAD_CONFIG);
++    expect(state.isSpeaking).toBe(true);
++    expect(utteranceEnded).toBe(false);
++  });
++
++  it("stays idle on a quiet frame when not already speaking", () => {
++    const { state, utteranceEnded } = nextVadState(idle, 0.001, 16, DEFAULT_VAD_CONFIG);
++    expect(state.isSpeaking).toBe(false);
++    expect(utteranceEnded).toBe(false);
++  });
++
++  it("does not end the utterance on a brief pause shorter than the silence timeout", () => {
++    const speaking = { isSpeaking: true, silenceDurationMs: 0 };
++    const { state, utteranceEnded } = nextVadState(speaking, 0.001, 200, DEFAULT_VAD_CONFIG);
++    expect(utteranceEnded).toBe(false);
++    expect(state.isSpeaking).toBe(true);
++  });
++
++  it("ends the utterance once accumulated silence crosses the timeout", () => {
++    let state = { isSpeaking: true, silenceDurationMs: 0 };
++    let utteranceEnded = false;
++    // Feed quiet frames until we cross the 700ms default timeout.
++    for (let i = 0; i < 10 && !utteranceEnded; i++) {
++      const result = nextVadState(state, 0.001, 100, DEFAULT_VAD_CONFIG);
++      state = result.state;
++      utteranceEnded = result.utteranceEnded;
++    }
++    expect(utteranceEnded).toBe(true);
++    expect(state.isSpeaking).toBe(false);
++  });
++
++  it("resets the silence counter if speech resumes before the timeout", () => {
++    const midSilence = { isSpeaking: true, silenceDurationMs: 400 };
++    const { state } = nextVadState(midSilence, 0.5, 16, DEFAULT_VAD_CONFIG);
++    expect(state.silenceDurationMs).toBe(0);
++    expect(state.isSpeaking).toBe(true);
++  });
++});
